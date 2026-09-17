@@ -28,6 +28,12 @@ pub struct Session {
     pub change_index: usize,
     human: Vec<HumanEdit>,
 }
+struct ChangeTarget {
+    file: String,
+    line: usize,
+    replacement: Option<workspace::File>,
+    label: String,
+}
 pub struct Controller {
     pub workspace: Workspace,
     pub session: Session,
@@ -36,6 +42,7 @@ pub struct Controller {
     pub generation: u64,
     pub navigation: Option<Location>,
     path: PathBuf,
+    change_cache: std::cell::RefCell<Option<(usize, Vec<Change>)>>,
 }
 impl Controller {
     pub fn create(project: &Path, directory: &Path) -> Result<Self> {
@@ -60,10 +67,16 @@ impl Controller {
             busy: false,
             generation: 0,
             navigation: None,
+            change_cache: std::cell::RefCell::new(None),
             path: directory.join("session.json"),
         };
         c.save()?;
         Ok(c)
+    }
+    pub fn current(&self) -> Result<Snapshot> {
+        let mut known = self.workspace.load(&self.session.baseline)?;
+        known.extend(self.workspace.load(&self.session.applied)?);
+        workspace::capture_known(&self.workspace.real, &known)
     }
     pub fn save(&self) -> Result<()> {
         let tmp = self.path.with_extension("tmp");
@@ -126,7 +139,7 @@ impl Controller {
             "Begin requires PLAN and an idle agent"
         );
         self.saved()?;
-        let current = workspace::capture(&self.workspace.real)?;
+        let current = self.current()?;
         self.observe_human(&current)?;
         self.workspace.sync(&current)?;
         self.session.pending_base = Some(self.workspace.store(&current)?);
@@ -156,7 +169,7 @@ impl Controller {
             workspace::merge(&base_files, &result, &reverse)
                 .context("revision overlaps a manual edit; proposal was not applied")?;
         }
-        validate_tour(&tour, &result, &base_files)?;
+        validate_tour(&tour, &result)?;
         let tree = self.workspace.store(&result)?;
         let id = self.session.proposals.len() + 1;
         self.session.proposals.push(Proposal {
@@ -196,7 +209,7 @@ impl Controller {
             .find(|p| p.id == id)
             .context("unknown proposal")?
             .clone();
-        let current = workspace::capture(&self.workspace.real)?;
+        let current = self.current()?;
         self.observe_human(&current)?;
         let mut target = self.workspace.load(&p.tree)?;
         for edit in &self.session.human {
@@ -247,7 +260,7 @@ impl Controller {
                 &self.workspace.load(&edit.after)?,
             )?;
         }
-        let current = workspace::capture(&self.workspace.real)?;
+        let current = self.current()?;
         let desired = workspace::merge(&base, &current, &target)?;
         workspace::replace(&self.workspace.real, &current, &desired)?;
         self.session.applied = self.workspace.store(&target)?;
@@ -277,8 +290,8 @@ impl Controller {
             matches!(self.session.stage, Stage::Discuss | Stage::Plan),
             "repository tours are available during DISCUSS/PLAN"
         );
-        let files = workspace::capture(&self.workspace.real)?;
-        validate_tour(&content, &files, &files)?;
+        let files = self.current()?;
+        validate_tour(&content, &files)?;
         self.add_tour(TourSource::Repository, content);
         self.navigate_tour()?;
         self.save()
@@ -328,20 +341,27 @@ impl Controller {
         let Some(p) = self.proposal() else {
             return Ok(vec![]);
         };
-        Ok(self
+        if let Some((id, changes)) = &*self.change_cache.borrow() {
+            if *id == p.id {
+                return Ok(changes.clone());
+            }
+        }
+        let changes: Vec<_> = self
             .change_targets(p)?
             .into_iter()
             .enumerate()
-            .map(|(id, (file, line, _, label))| Change {
+            .map(|(id, change)| Change {
                 id,
-                file,
-                line,
-                label,
+                file: change.file,
+                line: change.line,
+                label: change.label,
             })
-            .collect())
+            .collect();
+        *self.change_cache.borrow_mut() = Some((p.id, changes.clone()));
+        Ok(changes)
     }
     // One target per text hunk, or one target for a creation/deletion/binary/mode change.
-    fn change_targets(&self, p: &Proposal) -> Result<Vec<(String, usize, Snapshot, String)>> {
+    fn change_targets(&self, p: &Proposal) -> Result<Vec<ChangeTarget>> {
         let base = self.workspace.load(&p.base)?;
         let result = self.workspace.load(&p.tree)?;
         let mut targets = Vec::new();
@@ -384,20 +404,26 @@ impl Controller {
                         for line in &rl[rs + rn..] {
                             bytes.extend_from_slice(line)
                         }
-                        let mut target = result.clone();
-                        target.get_mut(path).unwrap().bytes = bytes;
-                        targets.push((path.clone(), rs + 1, target, header.to_owned()));
+                        let target = workspace::File {
+                            bytes,
+                            executable: r.executable,
+                        };
+                        targets.push(ChangeTarget {
+                            file: path.clone(),
+                            line: rs + 1,
+                            replacement: Some(target),
+                            label: header.to_owned(),
+                        });
                     }
                     continue;
                 }
             }
-            let mut target = result.clone();
-            if let Some(b) = base.get(path) {
-                target.insert(path.clone(), b.clone());
-            } else {
-                target.remove(path);
-            }
-            targets.push((path.clone(), 1, target, "file change".into()));
+            targets.push(ChangeTarget {
+                file: path.clone(),
+                line: 1,
+                replacement: base.get(path).cloned(),
+                label: "file change".into(),
+            });
         }
         Ok(targets)
     }
@@ -409,13 +435,21 @@ impl Controller {
         self.saved()?;
         let p = self.proposal().context("missing proposal")?.clone();
         let targets = self.change_targets(&p)?;
-        let (_, _, target, _) = targets.get(id).context("unknown change")?;
-        let current = workspace::capture(&self.workspace.real)?;
-        let desired = workspace::merge(&self.workspace.load(&p.tree)?, &current, target)?;
+        let change = targets.get(id).context("unknown change")?;
+        let path = &change.file;
+        let replacement = &change.replacement;
+        let mut target = self.workspace.load(&p.tree)?;
+        if let Some(file) = replacement {
+            target.insert(path.clone(), file.clone());
+        } else {
+            target.remove(path);
+        }
+        let current = self.current()?;
+        let desired = workspace::merge(&self.workspace.load(&p.tree)?, &current, &target)?;
         let expected = workspace::merge(
             &self.workspace.load(&p.tree)?,
             &self.workspace.load(&self.session.applied)?,
-            target,
+            &target,
         )?;
         workspace::replace(&self.workspace.real, &current, &desired)?;
         // Revert is a human decision too; preserve it in later revisions/history switches.
@@ -467,7 +501,7 @@ fn range(s: &str) -> Result<(usize, usize)> {
         count,
     ))
 }
-fn validate_tour(tour: &TourDraft, result: &Snapshot, base: &Snapshot) -> Result<()> {
+fn validate_tour(tour: &TourDraft, result: &Snapshot) -> Result<()> {
     ensure!(
         !tour.title.trim().is_empty() && !tour.overview.trim().is_empty(),
         "tour needs a title and overview"
@@ -476,7 +510,6 @@ fn validate_tour(tour: &TourDraft, result: &Snapshot, base: &Snapshot) -> Result
         workspace::valid_path(&stop.file)?;
         let file = result
             .get(&stop.file)
-            .or_else(|| base.get(&stop.file))
             .context("tour references an unknown file")?;
         ensure!(
             stop.line > 0 && stop.line <= file.bytes.split(|b| *b == b'\n').count().max(1),

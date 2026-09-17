@@ -26,7 +26,7 @@ pub enum AgentEvent {
 /// The controller grants a workspace capability per turn. Backends cannot change stages.
 pub trait AgentBackend: Send {
     fn start(&mut self, turn: Turn, events: mpsc::UnboundedSender<AgentEvent>) -> Result<()>;
-    fn cancel(&mut self);
+    fn cancel(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 }
 /// A deliberately labeled offline demonstration, never selected implicitly.
 #[derive(Default)]
@@ -42,11 +42,34 @@ impl AgentBackend for MockBackend {
             std::fs::write(path, "A proposal created in Tandem's shadow workspace.\n")?;
             let tour=TourDraft{title:"A first proposal".into(),overview:"This offline demo adds one file. The real working tree is unchanged until Review.".into(),stops:vec![crate::protocol::TourStop{title:"The proposed file".into(),body:"This file exists in the shadow workspace. Review will apply it as an ordinary uncommitted file.".into(),file:"tandem-example.txt".into(),line:1}]};
             events.send(AgentEvent::Complete(Some(tour)))?;
+        } else if turn.prompt.to_lowercase().contains("tour") {
+            let files = crate::workspace::capture(&turn.workspace)?;
+            let file = files
+                .keys()
+                .find(|p| !p.starts_with('.'))
+                .ok_or_else(|| anyhow::anyhow!("no files to tour"))?
+                .clone();
+            let stop=crate::protocol::TourStop {title:"Explore existing code".into(),body:"Offline demonstration: this stop points into an existing repository file. Codex supplies the conceptual narrative in live sessions.".into(),file,line:1};
+            events.send(AgentEvent::Complete(Some(TourDraft {
+                title: "Repository tour (offline demo)".into(),
+                overview: "A read-only tour, independent of any proposal.".into(),
+                stops: vec![
+                    stop.clone(),
+                    crate::protocol::TourStop {
+                        title: "Return to the same location".into(),
+                        body: "A later stop can continue the explanation at the same location."
+                            .into(),
+                        ..stop
+                    },
+                ],
+            })))?;
         } else {
             events.send(AgentEvent::Message(format!("[offline mock] {}\nSelect /plan <description>, then /begin to create a demo proposal.",turn.prompt)))?;
             events.send(AgentEvent::Complete(None))?;
         }
         Ok(())
     }
-    fn cancel(&mut self) {}
+    fn cancel(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
 }

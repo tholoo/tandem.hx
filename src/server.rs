@@ -62,35 +62,72 @@ pub async fn serve(
     let (joins, mut joined) = mpsc::unbounded_channel();
     let (events, mut event_rx) = mpsc::unbounded_channel();
     let mut peers: Vec<Reply> = vec![];
-    let result=async {loop {tokio::select! {
-        stream=listener.accept()=> {let (stream,_)=stream?;let tx=tx.clone();let joins=joins.clone();tokio::spawn(async move {let _=client(stream,tx,joins).await;});}
-        Some(peer)=joined.recv()=> {peer.send(serde_json::to_value(Event::State{view:Box::new(c.view()?)})?)?;peers.push(peer);}
-        Some(incoming)=incoming.recv()=> {
-            let req=incoming.request;let shutdown=matches!(req.action,Action::Shutdown);
-            let result=if req.version!=VERSION {Err(anyhow::anyhow!("unsupported protocol version {}",req.version))} else {handle(&mut c,backend.as_mut(),req.action,&events)};
-            let (text,error)=match result {Ok(t)=>(t,None),Err(e)=>(None,Some(format!("{e:#}")))};
-            let okay=error.is_none();
-            let response=Response{version:VERSION,id:req.id,view:Some(c.view()?),text,error};
-            let _=incoming.reply.send(serde_json::to_value(response)?);
-            broadcast(&mut peers,Event::State{view:Box::new(c.view()?)});
-            if shutdown&&okay {backend.cancel();break Ok(())}
-        }
-        Some(event)=event_rx.recv()=> {
-            match event {
-                AgentEvent::Message(text)=>broadcast(&mut peers,Event::Message{text}),
-                AgentEvent::Activity(text)=>broadcast(&mut peers,Event::Activity{text}),
-                AgentEvent::Failed(text)=> {c.failed()?;broadcast(&mut peers,Event::Error{text});}
-                AgentEvent::Complete(tour)=> {
-                    let result=if c.session.stage==Stage::Building {tour.context("backend omitted proposal tour").and_then(|t|c.complete(t))} else {
-                        c.busy=false;if let Some(t)=tour {c.repository_tour(t)}else{Ok(())}
+    let result = async {
+        loop {
+            tokio::select! {
+                stream = listener.accept() => {
+                    let (stream, _) = stream?;
+                    let tx = tx.clone();
+                    let joins = joins.clone();
+                    tokio::spawn(async move { let _ = client(stream, tx, joins).await; });
+                }
+                Some(peer) = joined.recv() => {
+                    let _ = peer.send(serde_json::to_value(Event::State { view: Box::new(c.view()?) })?);
+                    peers.push(peer);
+                }
+                Some(incoming) = incoming.recv() => {
+                    let req = incoming.request;
+                    let shutdown = matches!(req.action, Action::Shutdown);
+                    let cancelled = matches!(req.action, Action::Cancel);
+                    let result = if req.version != VERSION {
+                        Err(anyhow::anyhow!("unsupported protocol version {}", req.version))
+                    } else {
+                        handle(&mut c, backend.as_mut(), req.action, &events).await
                     };
-                    if let Err(e)=result {c.failed()?;broadcast(&mut peers,Event::Error{text:format!("{e:#}")});}
+                    let (text, error) = match result {
+                        Ok(t) => (t, None),
+                        Err(e) => (None, Some(format!("{e:#}"))),
+                    };
+                    let okay = error.is_none();
+                    if cancelled && okay { while event_rx.try_recv().is_ok() {} }
+                    let response = Response { version: VERSION, id: req.id, view: Some(c.view()?), text, error };
+                    let _ = incoming.reply.send(serde_json::to_value(response)?);
+                    broadcast(&mut peers, Event::State { view: Box::new(c.view()?) });
+                    if shutdown && okay { backend.cancel().await; break Ok(()); }
+                }
+                Some(event) = event_rx.recv() => {
+                    match event {
+                        AgentEvent::Message(text) => broadcast(&mut peers, Event::Message { text }),
+                        AgentEvent::Activity(text) => broadcast(&mut peers, Event::Activity { text }),
+                        AgentEvent::Failed(text) => {
+                            backend.cancel().await;
+                            c.failed()?;
+                            broadcast(&mut peers, Event::Error { text });
+                        }
+                        AgentEvent::Complete(tour) => {
+                            backend.cancel().await;
+                            let result = if c.session.stage == Stage::Building {
+                                tour.context("backend omitted proposal tour").and_then(|t| c.complete(t))
+                            } else {
+                                c.busy = false;
+                                if let Some(t) = tour { c.repository_tour(t) } else { Ok(()) }
+                            };
+                            if let Err(e) = result {
+                                c.failed()?;
+                                broadcast(&mut peers, Event::Error { text: format!("{e:#}") });
+                            }
+                        }
+                    }
+                    broadcast(&mut peers, Event::State { view: Box::new(c.view()?) });
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    backend.cancel().await;
+                    c.failed()?;
+                    break Ok(());
                 }
             }
-            broadcast(&mut peers,Event::State{view:Box::new(c.view()?)});
         }
-        _=tokio::signal::ctrl_c()=> {backend.cancel();c.failed()?;break Ok(())}
-    }}}.await;
+    }.await;
     let _ = std::fs::remove_file(socket);
     result
 }
@@ -105,6 +142,9 @@ fn start(
     mode: WorkspaceMode,
     events: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<()> {
+    if mode == WorkspaceMode::ReadOnly && c.session.stage != Stage::Tour {
+        c.workspace.sync(&c.current()?)?;
+    }
     let turn = Turn {
         prompt,
         context: c.context()?,
@@ -118,7 +158,7 @@ fn start(
     }
     Ok(())
 }
-fn handle(
+async fn handle(
     c: &mut Controller,
     backend: &mut dyn AgentBackend,
     action: Action,
@@ -133,7 +173,7 @@ fn handle(
             c.editor = context;
         }
         Action::Cancel => {
-            backend.cancel();
+            backend.cancel().await;
             c.failed()?;
         }
         Action::Shutdown => {
@@ -142,10 +182,6 @@ fn handle(
         Action::Message { text } => {
             ensure!(!c.busy, "agent is busy; cancel the current turn first");
             ensure!(!text.trim().is_empty(), "empty message");
-            if c.session.stage != Stage::Tour {
-                c.workspace
-                    .sync(&crate::workspace::capture(&c.workspace.real)?)?;
-            }
             start(c, backend, text, WorkspaceMode::ReadOnly, events)?;
         }
         Action::Plan { text } => {

@@ -22,6 +22,7 @@ pub struct CodexBackend {
     thread: Arc<Mutex<Option<String>>>,
     task: Option<JoinHandle<()>>,
     executable: PathBuf,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
 }
 impl CodexBackend {
     pub fn new(session: &Path, executable: PathBuf) -> Result<Self> {
@@ -69,6 +70,7 @@ impl CodexBackend {
             thread: Arc::new(Mutex::new(None)),
             task: None,
             executable,
+            cancel: None,
         })
     }
 }
@@ -81,22 +83,31 @@ impl AgentBackend for CodexBackend {
         let home = self.home.clone();
         let thread = self.thread.clone();
         let executable = self.executable.clone();
+        let (cancel, cancelled) = tokio::sync::oneshot::channel();
+        self.cancel = Some(cancel);
         self.task = Some(tokio::spawn(async move {
-            if let Err(e) = run(&home, &executable, thread, turn, &events).await {
+            if let Err(e) = run(&home, &executable, thread, turn, &events, cancelled).await {
                 let _ = events.send(AgentEvent::Failed(format!("{e:#}")));
             }
         }));
         Ok(())
     }
-    fn cancel(&mut self) {
-        if let Some(t) = self.task.take() {
-            t.abort();
+    fn cancel(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
         }
+        Box::pin(async move {
+            if let Some(task) = self.task.take() {
+                let _ = task.await;
+            }
+        })
     }
 }
 impl Drop for CodexBackend {
     fn drop(&mut self) {
-        self.cancel();
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
     }
 }
 
@@ -108,7 +119,7 @@ pub fn sandbox_command(
     mode: WorkspaceMode,
     program: &Path,
 ) -> Command {
-    let mut c = Command::new("bwrap");
+    let mut c = Command::new(std::env::var_os("TANDEM_BWRAP").unwrap_or_else(|| "bwrap".into()));
     c.args([
         "--die-with-parent",
         "--unshare-pid",
@@ -130,6 +141,29 @@ pub fn sandbox_command(
     })
     .arg(workspace)
     .arg(workspace);
+    // A private /tmp also hides linked-worktree metadata and shared objects there.
+    // Expose only those Git directories again, always read-only.
+    if let Ok(dotgit) = fs::read_to_string(workspace.join(".git")) {
+        if let Some(path) = dotgit.trim().strip_prefix("gitdir: ") {
+            let gitdir = PathBuf::from(path);
+            if let Ok(common) = fs::read_to_string(gitdir.join("commondir")) {
+                if let Ok(common) = gitdir.join(common.trim()).canonicalize() {
+                    c.arg("--ro-bind").arg(&common).arg(&common);
+                    if let Ok(alternates) =
+                        fs::read_to_string(common.join("objects/info/alternates"))
+                    {
+                        for path in alternates
+                            .lines()
+                            .map(PathBuf::from)
+                            .filter(|p| p.is_absolute() && p.exists())
+                        {
+                            c.arg("--ro-bind").arg(&path).arg(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Protect worktree metadata: even BUILD cannot commit, change refs, or rewrite the index.
     if workspace.join(".git").exists() {
         c.arg("--ro-bind")
@@ -232,6 +266,7 @@ async fn run(
     thread: Arc<Mutex<Option<String>>>,
     turn: Turn,
     events: &mpsc::UnboundedSender<AgentEvent>,
+    cancelled: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
     let log = fs::File::create(home.parent().unwrap().join("codex-stderr.log"))?;
     let mut command = sandbox_command(home, &turn.workspace, turn.mode, executable);
@@ -243,6 +278,23 @@ async fn run(
         .kill_on_drop(true)
         .spawn()
         .context("start sandboxed Codex (bubblewrap required)")?;
+    let result = tokio::select! {
+        result=run_wire(&mut child,thread,turn,events)=>Some(result),
+        _=cancelled=>None,
+    };
+    let _ = child.kill().await;
+    child.wait().await?;
+    if let Some(result) = result {
+        let _ = events.send(AgentEvent::Complete(result?));
+    }
+    Ok(())
+}
+async fn run_wire(
+    child: &mut tokio::process::Child,
+    thread: Arc<Mutex<Option<String>>>,
+    turn: Turn,
+    events: &mpsc::UnboundedSender<AgentEvent>,
+) -> Result<Option<TourDraft>> {
     let mut wire = Wire {
         input: child.stdin.take().unwrap(),
         lines: BufReader::new(child.stdout.take().unwrap()).lines(),
@@ -307,11 +359,7 @@ async fn run(
                 if !answer.message.is_empty() {
                     let _ = events.send(AgentEvent::Message(answer.message));
                 }
-                // Stop the runtime (and all namespace descendants) before the controller snapshots.
-                child.kill().await?;
-                child.wait().await?;
-                let _ = events.send(AgentEvent::Complete(answer.tour));
-                return Ok(());
+                return Ok(answer.tour);
             }
             _ => {
                 if let Some(event) = translate(&msg) {

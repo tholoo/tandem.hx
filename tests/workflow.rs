@@ -268,3 +268,120 @@ fn repository_tour_is_independent_of_proposals_and_discussion_stage() {
     assert_eq!(c.session.stage, Stage::Discuss);
     assert_eq!(before, workspace::capture(&c.workspace.real).unwrap());
 }
+
+#[test]
+fn new_ignore_rules_do_not_delete_baseline_untracked_work() {
+    let (t, c) = fixture();
+    let root = c.workspace.real.clone();
+    drop(c);
+    fs::write(root.join("notes.txt"), "human notes\n").unwrap();
+    let mut c = Controller::create(&root, &t.path().join("ignored-session")).unwrap();
+    build(&mut c, ".gitignore", "notes.txt\n");
+    c.apply().unwrap();
+    assert_eq!(read(&root, "notes.txt"), "human notes\n");
+    c.plan("another change".into()).unwrap();
+    c.begin().unwrap();
+    assert_eq!(read(&c.workspace.shadow, "notes.txt"), "human notes\n");
+    fs::write(c.workspace.shadow.join("other.txt"), "another proposal\n").unwrap();
+    c.complete(tour("other.txt")).unwrap();
+    c.apply().unwrap();
+    assert_eq!(read(&root, "notes.txt"), "human notes\n");
+}
+#[test]
+fn history_switch_preserves_manual_edits_or_reports_conflicts() {
+    let (_t, mut c) = fixture();
+    let original = read(&c.workspace.real, "app.txt");
+    build(&mut c, "app.txt", &original.replace("10", "5"));
+    c.apply().unwrap();
+    fs::write(
+        c.workspace.real.join("app.txt"),
+        original.replace("10", "2"),
+    )
+    .unwrap();
+    build(&mut c, "other.txt", "revision\n");
+    c.apply().unwrap();
+    c.switch(1).unwrap();
+    c.apply().unwrap();
+    assert!(read(&c.workspace.real, "app.txt").contains("ttl = 2"));
+    assert_eq!(read(&c.workspace.real, "other.txt"), "original\n");
+}
+#[test]
+fn binary_mode_and_deleted_file_reverts_preserve_git_index() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, mut c) = fixture();
+    c.plan("binary and executable changes".into()).unwrap();
+    c.begin().unwrap();
+    fs::write(c.workspace.shadow.join("binary.bin"), [0, 1, 2, 3]).unwrap();
+    fs::set_permissions(
+        c.workspace.shadow.join("app.txt"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    fs::remove_file(c.workspace.shadow.join("other.txt")).unwrap();
+    c.complete(tour("app.txt")).unwrap();
+    c.apply().unwrap();
+    assert_eq!(c.changes().unwrap().len(), 3);
+    for id in (0..3).rev() {
+        c.revert(id).unwrap();
+    }
+    assert!(!c.workspace.real.join("binary.bin").exists());
+    assert_eq!(read(&c.workspace.real, "other.txt"), "original\n");
+    assert_eq!(
+        fs::metadata(c.workspace.real.join("app.txt"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0
+    );
+    assert!(
+        git(&c.workspace.real, &["diff", "--cached"])
+            .unwrap()
+            .is_empty()
+    );
+}
+#[test]
+fn monorepo_subdirectory_resolves_root_and_reuses_worktree() {
+    let (_t, mut c) = fixture();
+    let shadow = c.workspace.shadow.clone();
+    fs::create_dir_all(c.workspace.real.join("packages/service")).unwrap();
+    fs::write(
+        c.workspace.real.join("packages/service/file.txt"),
+        "workspace\n",
+    )
+    .unwrap();
+    build(&mut c, "other.txt", "first\n");
+    c.apply().unwrap();
+    build(&mut c, "other.txt", "second\n");
+    c.apply().unwrap();
+    assert_eq!(shadow, c.workspace.shadow);
+    assert_eq!(read(&shadow, "packages/service/file.txt"), "workspace\n");
+    let session = tempfile::tempdir().unwrap();
+    let nested = Controller::create(
+        &c.workspace.real.join("packages/service"),
+        &session.path().join("nested"),
+    )
+    .unwrap();
+    assert_eq!(nested.workspace.real, c.workspace.real);
+}
+
+#[test]
+fn applying_content_preserves_private_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, mut c) = fixture();
+    fs::set_permissions(
+        c.workspace.real.join("other.txt"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    build(&mut c, "other.txt", "new contents\n");
+    c.apply().unwrap();
+    assert_eq!(
+        fs::metadata(c.workspace.real.join("other.txt"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+}

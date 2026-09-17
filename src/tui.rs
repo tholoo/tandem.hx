@@ -174,27 +174,52 @@ pub async fn run(socket: &Path) -> Result<()> {
     loop {
         draw(view.as_ref(), &history, &input, scroll)?;
         tokio::select! {
-            value=read_frame(&mut reader)=>{
-                let value=value?.context("controller disconnected")?;
-                if value.get("event").is_some(){match serde_json::from_value::<Event>(value)? {
-                    Event::State{view:v}=>view=Some(*v),Event::Message{text}=>history.push(format!("Assistant: {text}")),Event::Activity{text}=>history.push(text),Event::Error{text}=>history.push(format!("Error: {text}")),
-                }}else{let response:Response=serde_json::from_value(value)?;if let Some(v)=response.view{view=Some(v)}if let Some(e)=response.error{history.push(format!("Error: {e}"))}if let Some(t)=response.text{history.push(t)}}
-            }
-            Some(key)=key_rx.recv()=>{
-                let mut send=None;
-                match key {
-                    KeyEvent::Key(k) if k.kind==event::KeyEventKind::Press=>match k.code {
-                        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL)=>send=Some(Action::Cancel),
-                        KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL)=>break,
-                        KeyCode::Char(c)=>input.push(c),KeyCode::Backspace=>{input.pop();},
-                        KeyCode::PageUp=>scroll=scroll.saturating_add(10),KeyCode::PageDown=>scroll=scroll.saturating_sub(10),
-                        KeyCode::Enter if !input.trim().is_empty()=>{
-                            match action(&input,view.as_ref()){Ok(None)=>break,Ok(a)=>{history.push(format!("You: {input}"));send=a;},Err(e)=>history.push(e.to_string())}
-                            input.clear();scroll=0;
-                        },_=>{}
-                    }, KeyEvent::Paste(s)=>input.push_str(&safe(&s).replace('\n'," ")), _=>{}
+            value = read_frame(&mut reader) => {
+                let value = value?.context("controller disconnected")?;
+                if value.get("event").is_some() {
+                    match serde_json::from_value::<Event>(value)? {
+                        Event::State { view: v } => view = Some(*v),
+                        Event::Message { text } => history.push(format!("Assistant: {text}")),
+                        Event::Activity { text } => history.push(text),
+                        Event::Error { text } => history.push(format!("Error: {text}")),
+                    }
+                } else {
+                    let response: Response = serde_json::from_value(value)?;
+                    if let Some(v) = response.view { view = Some(v); }
+                    if let Some(e) = response.error { history.push(format!("Error: {e}")); }
+                    if let Some(t) = response.text { history.push(t); }
                 }
-                if let Some(action)=send{id+=1;let mut bytes=serde_json::to_vec(&Request{version:VERSION,id,action})?;bytes.push(b'\n');write.write_all(&bytes).await?;}
+            }
+            Some(key) = key_rx.recv() => {
+                let mut send = None;
+                match key {
+                    KeyEvent::Key(k) if k.kind == event::KeyEventKind::Press => match k.code {
+                        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => send = Some(Action::Cancel),
+                        KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL) => break,
+                        KeyCode::Char(c) => input.push(c),
+                        KeyCode::Backspace => { input.pop(); }
+                        KeyCode::PageUp => scroll = scroll.saturating_add(10),
+                        KeyCode::PageDown => scroll = scroll.saturating_sub(10),
+                        KeyCode::Enter if !input.trim().is_empty() => {
+                            match action(&input, view.as_ref()) {
+                                Ok(None) => break,
+                                Ok(a) => { history.push(format!("You: {input}")); send = a; }
+                                Err(e) => history.push(e.to_string()),
+                            }
+                            input.clear();
+                            scroll = 0;
+                        }
+                        _ => {}
+                    },
+                    KeyEvent::Paste(s) => input.push_str(&safe(&s).replace('\n', " ")),
+                    _ => {}
+                }
+                if let Some(action) = send {
+                    id += 1;
+                    let mut bytes = serde_json::to_vec(&Request { version: VERSION, id, action })?;
+                    bytes.push(b'\n');
+                    write.write_all(&bytes).await?;
+                }
             }
         }
         if history.len() > 2000 {

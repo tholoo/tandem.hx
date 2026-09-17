@@ -111,6 +111,17 @@ pub fn capture(root: &Path) -> Result<Snapshot> {
     Ok(result)
 }
 
+/// Paths already owned by a baseline stay in scope even after an ignore-rule change.
+pub fn capture_known(root: &Path, known: &Snapshot) -> Result<Snapshot> {
+    let mut files = capture(root)?;
+    for path in known.keys() {
+        if let Some(file) = read_file(root, path)? {
+            files.insert(path.clone(), file);
+        }
+    }
+    Ok(files)
+}
+
 #[derive(Debug)]
 pub struct Workspace {
     pub real: PathBuf,
@@ -161,7 +172,7 @@ impl Workspace {
             storage,
         };
         let baseline = capture(&ws.real)?;
-        replace(&ws.shadow, &capture(&ws.shadow)?, &baseline)?;
+        ws.sync(&baseline)?;
         Ok(ws)
     }
     /// Git trees are content-addressed snapshots, not commits or refs in the user's repository.
@@ -245,7 +256,12 @@ impl Workspace {
         .into())
     }
     pub fn sync(&self, files: &Snapshot) -> Result<()> {
-        replace(&self.shadow, &capture(&self.shadow)?, files)
+        replace(&self.shadow, &capture(&self.shadow)?, files)?;
+        // Only the private shadow index is updated. This also keeps baseline untracked
+        // files visible to capture if the proposal introduces new ignore rules.
+        let tree = self.store(files)?;
+        git(&self.shadow, &["read-tree", &tree])?;
+        Ok(())
     }
 }
 
@@ -363,12 +379,23 @@ fn write_file(root: &Path, path: &str, file: Option<&File>) -> Result<()> {
         fs::create_dir_all(parent)?;
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
         temp.write_all(&file.bytes)?;
-        temp.as_file()
-            .set_permissions(fs::Permissions::from_mode(if file.executable {
-                0o755
+        // Preserve the user's read/write permissions on an existing file; Git only
+        // models the executable bit. In particular, do not widen a private 0600 file.
+        let existing = fs::metadata(&target)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0o600);
+        let execute = if file.executable {
+            if existing & 0o111 != 0 {
+                existing & 0o111
             } else {
-                0o644
-            }))?;
+                0o100
+            }
+        } else {
+            0
+        };
+        let mode = (existing & 0o666) | execute;
+        temp.as_file()
+            .set_permissions(fs::Permissions::from_mode(mode))?;
         temp.as_file().sync_all()?;
         temp.persist(&target)?;
     } else if target.exists() {

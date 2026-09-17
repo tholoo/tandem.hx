@@ -17,7 +17,7 @@
             nativeBuildInputs = [ pkgs.makeWrapper ];
             nativeCheckInputs = [ pkgs.git ];
             postInstall = ''
-              wrapProgram $out/bin/tandem --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.bubblewrap ]}
+              wrapProgram $out/bin/tandem --set-default TANDEM_BWRAP ${pkgs.bubblewrap}/bin/bwrap --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.bubblewrap ]}
               mkdir -p $out/share/tandem
               cp -r helix examples $out/share/tandem/
             '';
@@ -32,6 +32,7 @@
         let pkgs = pkgsFor system; in {
           default = pkgs.mkShell {
             packages = with pkgs; [ cargo rustc rustfmt clippy rust-analyzer git bubblewrap ];
+            TANDEM_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           };
         });
