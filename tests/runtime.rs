@@ -85,7 +85,10 @@ async fn socket_workflow_with_backend_and_repository_tour() {
     let c = Controller::create(&t.path().join("repo"), &t.path().join("session")).unwrap();
     let socket = t.path().join("controller.sock");
     let path = socket.clone();
-    let handle = tokio::spawn(async move { server::serve(c, Box::new(MockBackend), &path).await });
+    let handle =
+        tokio::spawn(
+            async move { server::serve(c, Box::new(MockBackend::default()), &path).await },
+        );
     for _ in 0..100 {
         if socket.exists() {
             break;
@@ -139,6 +142,24 @@ async fn socket_workflow_with_backend_and_repository_tour() {
     send(&socket, Action::Begin).await;
     assert_eq!(idle(&socket).await.stage, Stage::Tour);
     assert!(!t.path().join("repo/tandem-example.txt").exists());
+    send(
+        &socket,
+        Action::Revise {
+            feedback: "revise before application".into(),
+        },
+    )
+    .await;
+    idle(&socket).await;
+    send(&socket, Action::Begin).await;
+    let revised = idle(&socket).await;
+    assert_eq!(revised.proposal, Some(2));
+    assert!(
+        fs::read_to_string(t.path().join("session/worktree/tandem-example.txt"))
+            .unwrap()
+            .contains("Offline revision 2")
+    );
+    assert!(!t.path().join("repo/tandem-example.txt").exists());
+    send(&socket, Action::Switch { proposal: 1 }).await;
     send(&socket, Action::Apply).await;
     assert!(t.path().join("repo/tandem-example.txt").exists());
     send(&socket, Action::Revert { change: 0 }).await;

@@ -64,6 +64,13 @@ try:
     assert (repo / "app.txt").read_text() == "hello\n"
     assert (session / "worktree/app.txt").read_text() == "hello\n"
     print("PASS: live read-only repository tour", flush=True)
+    tour_id = state["tour"]["id"]
+    send("tour_next")
+    send("message", text="Go back one step to the overview of this same tour.")
+    state = idle()
+    assert state["tour"]["id"] == tour_id and state["tour"]["current_stop"] == 0
+    assert state["stage"] == "discuss"
+    print("PASS: conversational navigation preserves the active tour and stage", flush=True)
     send("tour_close")
     send("plan", text="Change app.txt from hello to hi, keeping the trailing newline. Check the file with cat.")
     assert idle()["stage"] == "plan"

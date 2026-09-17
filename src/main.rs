@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
             };
             let c = Controller::create(&project, &session)?;
             let backend: Box<dyn AgentBackend> = if mock {
-                Box::new(MockBackend)
+                Box::new(MockBackend::default())
             } else {
                 Box::new(CodexBackend::new(&session, codex)?)
             };

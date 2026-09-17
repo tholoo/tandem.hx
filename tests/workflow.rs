@@ -95,6 +95,32 @@ fn stages_versions_tour_and_uncommitted_apply() {
     );
 }
 #[test]
+fn tour_refinement_and_navigation_preserve_source_and_reject_stale_positions() {
+    let (_t, mut c) = fixture();
+    c.present_tour(tour("app.txt")).unwrap();
+    let first = c.tour().unwrap().id;
+    c.tour_jump(first, 2).unwrap();
+    c.tour_jump(first, 0).unwrap();
+    assert_eq!(c.tour().unwrap().current_stop, 0);
+    assert!(c.tour_jump(first, usize::MAX).is_err());
+    c.present_tour(tour("other.txt")).unwrap();
+    assert!(c.tour_jump(first, 1).is_err());
+    assert_eq!(c.session.stage, Stage::Discuss);
+    c.close_tour().unwrap();
+    assert!(c.tour_jump(first, 1).is_err());
+
+    build(&mut c, "new.txt", "only in the proposal\n");
+    c.present_tour(tour("new.txt")).unwrap();
+    assert_eq!(c.tour().unwrap().source, TourSource::Proposal(1));
+    assert_eq!(c.session.proposals.len(), 1);
+    assert_eq!(c.session.stage, Stage::Tour);
+    assert!(!c.workspace.real.join("new.txt").exists());
+    let context: serde_json::Value = serde_json::from_str(&c.context().unwrap()).unwrap();
+    assert_eq!(context["active_tour"]["id"], c.tour().unwrap().id);
+    c.apply().unwrap();
+    assert_eq!(read(&c.workspace.real, "new.txt"), "only in the proposal\n");
+}
+#[test]
 fn dirty_staged_and_untracked_baseline_survives() {
     let (t, c) = fixture();
     let root = c.workspace.real.clone();
@@ -384,4 +410,70 @@ fn applying_content_preserves_private_file_permissions() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn session_creation_refuses_project_storage_and_existing_session_data() {
+    let (t, c) = fixture();
+    let before = workspace::capture(&c.workspace.real).unwrap();
+    assert!(Controller::create(&c.workspace.real, &c.workspace.real.join("runtime")).is_err());
+    assert!(!c.workspace.real.join("runtime").exists());
+    let link = t.path().join("project-link");
+    std::os::unix::fs::symlink(&c.workspace.real, &link).unwrap();
+    assert!(Controller::create(&c.workspace.real, &link.join("runtime")).is_err());
+    assert!(!c.workspace.real.join("runtime").exists());
+    let existing = t.path().join("existing");
+    fs::create_dir(&existing).unwrap();
+    fs::write(existing.join("keep"), "user data").unwrap();
+    assert!(Controller::create(&c.workspace.real, &existing).is_err());
+    assert_eq!(read(&existing, "keep"), "user data");
+    assert_eq!(before, workspace::capture(&c.workspace.real).unwrap());
+}
+
+#[test]
+fn later_human_choices_supersede_earlier_edits_across_revisions() {
+    let (_t, mut c) = fixture();
+    let original = read(&c.workspace.real, "app.txt");
+    build(&mut c, "app.txt", &original.replace("10", "5"));
+    c.apply().unwrap();
+    fs::write(
+        c.workspace.real.join("app.txt"),
+        original.replace("10", "2"),
+    )
+    .unwrap();
+    build(&mut c, "other.txt", "second proposal\n");
+    c.apply().unwrap();
+    fs::write(
+        c.workspace.real.join("app.txt"),
+        original.replace("10", "3"),
+    )
+    .unwrap();
+    build(&mut c, "other.txt", "third proposal\n");
+    c.apply().unwrap();
+    assert!(read(&c.workspace.real, "app.txt").contains("ttl = 3"));
+    c.switch(1).unwrap();
+    c.apply().unwrap();
+    assert!(read(&c.workspace.real, "app.txt").contains("ttl = 3"));
+}
+
+#[test]
+fn revising_an_unapplied_proposal_keeps_its_implementation_in_shadow() {
+    let (_t, mut c) = fixture();
+    build(&mut c, "other.txt", "first implementation\n");
+    c.plan("extend the proposal before applying it".into())
+        .unwrap();
+    c.begin().unwrap();
+    assert_eq!(
+        read(&c.workspace.shadow, "other.txt"),
+        "first implementation\n"
+    );
+    fs::write(c.workspace.shadow.join("app.txt"), "extension\n").unwrap();
+    c.complete(tour("app.txt")).unwrap();
+    assert_eq!(read(&c.workspace.real, "other.txt"), "original\n");
+    c.apply().unwrap();
+    assert_eq!(
+        read(&c.workspace.real, "other.txt"),
+        "first implementation\n"
+    );
+    assert_eq!(read(&c.workspace.real, "app.txt"), "extension\n");
 }

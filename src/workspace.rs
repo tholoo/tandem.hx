@@ -138,9 +138,32 @@ impl Workspace {
             "Tandem needs an existing HEAD; create the repository's first commit yourself",
         )?;
         ensure!(
-            !session.starts_with(&real),
+            session.is_absolute()
+                && !session
+                    .components()
+                    .any(|p| matches!(p, Component::ParentDir)),
+            "session storage must be an absolute path without '..'"
+        );
+        let mut ancestor = session;
+        let mut missing = Vec::new();
+        while !ancestor.exists() {
+            missing.push(ancestor.file_name().context("invalid session path")?);
+            ancestor = ancestor.parent().context("invalid session parent")?;
+        }
+        let mut resolved = ancestor.canonicalize()?;
+        for part in missing.into_iter().rev() {
+            resolved.push(part);
+        }
+        ensure!(
+            !resolved.starts_with(&real),
             "session storage must be outside the project"
         );
+        if session.exists() {
+            ensure!(
+                fs::read_dir(session)?.next().is_none(),
+                "session directory must be new or empty"
+            );
+        }
         fs::create_dir_all(session)?;
         fs::set_permissions(session, fs::Permissions::from_mode(0o700))?;
         let storage = session.join("objects");

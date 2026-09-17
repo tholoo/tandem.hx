@@ -36,7 +36,7 @@ tandem chat /path/to/session/controller.sock
 
 Use `/plan add a demonstration file`, then `/begin`. After the proposal tour, `/review` applies it; `/revert` reverses the current change. `/diff` shows the proposal patch. `/revise <feedback>` prepares another plan; `/begin` explicitly authorizes its build. `/proposal 1` revisits an older version. `/quit` detaches the TUI without deleting session data.
 
-Ask “Give me a tour of this repo” in ordinary conversation. The editor displays an overview and ordered stops; Previous/Next can revisit locations. `/jump N` rewinds to a known stop and `/close` ends a repository tour without leaving DISCUSS. Questions automatically include file/cursor/selection and active-tour context.
+Ask “Give me a tour of this repo” in ordinary conversation. The editor displays an overview and ordered stops; Previous/Next can revisit locations. With Codex, “go deeper,” “skip tests,” or “go back two steps” can refine or navigate the active tour. `/jump N` jumps directly to a stop and `/close` ends a repository tour without leaving DISCUSS or PLAN. Questions automatically include file/cursor/selection and active-tour context.
 
 For a two-pane Zellij session, run the controller in the background, export its `TANDEM_SOCKET`, and load [examples/zellij.kdl](examples/zellij.kdl):
 
@@ -64,6 +64,6 @@ python3 scripts/check-codex.py
 
 `nix develop` and the Nix package select Bubblewrap explicitly. Outside Nix, `TANDEM_BWRAP` can select a compatible binary if a system wrapper is unsuitable. The mock backend is a labeled demo, not an implementation agent.
 
-Current limits: a repository needs an existing commit; symlinks, submodules, and non-UTF-8 filenames are rejected. Ignored files are not imported initially. Save Helix buffers before Begin/Review/Revert, and avoid concurrent writes during those operations. Session snapshots persist, but a crash-resume UI is not implemented. Conflicting revisions leave the shadow available for inspection and the real tree untouched. Runtime files can include source and a private copy of the existing Codex login; delete the session directory when finished. No credentials or machine configuration belong in this repository.
+Current limits: a repository needs an existing commit; symlinks, submodules, and non-UTF-8 filenames are rejected. Ignored files are not imported initially. Save Helix buffers before Begin/Review/Revert, and avoid concurrent writes during those operations. Session snapshots persist, but a crash-resume UI is not implemented. Conflicting revisions leave the shadow available for inspection and the real tree untouched. Build commands can write the shadow and private temporary scratch space; network access and permission expansion are disabled, so uncached dependency downloads require a future approval path. Runtime files can include source and a private copy of the existing Codex login; delete the session directory when finished. No credentials or machine configuration belong in this repository.
 
 See [architecture](docs/architecture.md) and [IPC protocol](docs/protocol.md) for the boundaries and preservation rules.

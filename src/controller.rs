@@ -22,6 +22,7 @@ pub struct Session {
     pub baseline: String,
     pub applied: String,
     pub pending_base: Option<String>,
+    pub pending_proposal: bool,
     pub plan: String,
     pub tours: Vec<Tour>,
     pub active_tour: Option<usize>,
@@ -57,6 +58,7 @@ impl Controller {
                 baseline: baseline.clone(),
                 applied: baseline,
                 pending_base: None,
+                pending_proposal: false,
                 plan: String::new(),
                 tours: vec![],
                 active_tour: None,
@@ -133,6 +135,24 @@ impl Controller {
         }
         Ok(())
     }
+    /// Undo recorded human deltas in memory, newest first. This computes their
+    /// cumulative effect while allowing a later human choice to supersede an earlier one.
+    /// The returned snapshot is only a merge ancestor; it is never written to disk.
+    fn without_human(&self, current: &Snapshot) -> Result<Snapshot> {
+        let mut ancestor = current.clone();
+        for edit in self.session.human.iter().rev() {
+            ancestor = workspace::merge(
+                &self.workspace.load(&edit.after)?,
+                &ancestor,
+                &self.workspace.load(&edit.before)?,
+            )?;
+        }
+        Ok(ancestor)
+    }
+    fn preserve_human(&self, current: &Snapshot, target: &Snapshot) -> Result<Snapshot> {
+        workspace::merge(&self.without_human(current)?, target, current)
+            .context("proposal conflicts with the current human choices")
+    }
     pub fn begin(&mut self) -> Result<()> {
         ensure!(
             !self.busy && self.session.stage == Stage::Plan,
@@ -141,7 +161,24 @@ impl Controller {
         self.saved()?;
         let current = self.current()?;
         self.observe_human(&current)?;
-        self.workspace.sync(&current)?;
+        let starting = if self.session.pending_proposal {
+            let proposal = self.proposal().context("missing pending proposal")?;
+            let pending_base = self.workspace.load(
+                self.session
+                    .pending_base
+                    .as_ref()
+                    .context("missing pending baseline")?,
+            )?;
+            let merged = workspace::merge(
+                &pending_base,
+                &current,
+                &self.workspace.load(&proposal.tree)?,
+            )?;
+            self.preserve_human(&current, &merged)?
+        } else {
+            current.clone()
+        };
+        self.workspace.sync(&starting)?;
         self.session.pending_base = Some(self.workspace.store(&current)?);
         self.session.stage = Stage::Building;
         self.session.active_tour = None;
@@ -162,13 +199,9 @@ impl Controller {
         let base_files = self.workspace.load(&base)?;
         // Check whether this revision changes a human's prior choice. The reverse merge is
         // a conflict probe only: its result is discarded, never used to undo human work.
-        for edit in &self.session.human {
-            let before = self.workspace.load(&edit.before)?;
-            let after = self.workspace.load(&edit.after)?;
-            let reverse = workspace::merge(&after, &base_files, &before)?;
-            workspace::merge(&base_files, &result, &reverse)
-                .context("revision overlaps a manual edit; proposal was not applied")?;
-        }
+        let ancestor = self.without_human(&base_files)?;
+        workspace::merge(&base_files, &result, &ancestor)
+            .context("revision overlaps a manual edit; proposal was not applied")?;
         validate_tour(&tour, &result)?;
         let tree = self.workspace.store(&result)?;
         let id = self.session.proposals.len() + 1;
@@ -178,6 +211,7 @@ impl Controller {
             tree,
         });
         self.session.selected = Some(id);
+        self.session.pending_proposal = true;
         self.add_tour(TourSource::Proposal(id), tour);
         self.session.change_index = 0;
         self.session.stage = Stage::Tour;
@@ -211,20 +245,13 @@ impl Controller {
             .clone();
         let current = self.current()?;
         self.observe_human(&current)?;
-        let mut target = self.workspace.load(&p.tree)?;
-        for edit in &self.session.human {
-            target = workspace::merge(
-                &self.workspace.load(&edit.before)?,
-                &target,
-                &self.workspace.load(&edit.after)?,
-            )
-            .context("older proposal conflicts with a saved human choice")?;
-        }
+        let target = self.preserve_human(&current, &self.workspace.load(&p.tree)?)?;
         let from = self.workspace.load(&self.session.applied)?;
         let desired = workspace::merge(&from, &current, &target)?;
         self.workspace.sync(&desired)?;
         self.session.pending_base = Some(self.workspace.store(&current)?);
         self.session.selected = Some(id);
+        self.session.pending_proposal = true;
         self.session.stage = Stage::Tour;
         self.session.active_tour = self
             .session
@@ -252,19 +279,14 @@ impl Controller {
         // Use the immutable proposal plus explicitly reconciled human choices. Never trust
         // an editable preview buffer as the source of the proposal.
         let p = self.proposal().context("missing proposal")?.clone();
-        let mut target = self.workspace.load(&p.tree)?;
-        for edit in &self.session.human {
-            target = workspace::merge(
-                &self.workspace.load(&edit.before)?,
-                &target,
-                &self.workspace.load(&edit.after)?,
-            )?;
-        }
+        let target = self.preserve_human(&base, &self.workspace.load(&p.tree)?)?;
         let current = self.current()?;
         let desired = workspace::merge(&base, &current, &target)?;
         workspace::replace(&self.workspace.real, &current, &desired)?;
         self.session.applied = self.workspace.store(&target)?;
         self.session.stage = Stage::Review;
+        self.session.pending_proposal = false;
+        self.session.pending_base = None;
         self.session.active_tour = None;
         self.session.change_index = 0;
         self.navigate_change()?;
@@ -295,6 +317,26 @@ impl Controller {
         self.add_tour(TourSource::Repository, content);
         self.navigate_tour()?;
         self.save()
+    }
+    /// A conversational refinement retains the active proposal's source and stage.
+    pub fn present_tour(&mut self, content: TourDraft) -> Result<()> {
+        if self.session.stage != Stage::Tour {
+            return self.repository_tour(content);
+        }
+        let source = self.tour().context("no active tour")?.source.clone();
+        validate_tour(&content, &workspace::capture(&self.workspace.shadow)?)?;
+        self.add_tour(source, content);
+        self.navigate_tour()?;
+        self.save()
+    }
+    pub fn tour_jump(&mut self, tour_id: usize, index: usize) -> Result<()> {
+        let tour = self.tour().context("no active tour")?;
+        ensure!(
+            tour.id == tour_id,
+            "active tour changed; navigation was ignored"
+        );
+        ensure!(index <= tour.content.stops.len(), "unknown tour stop");
+        self.tour_move(index as isize - tour.current_stop as isize)
     }
     pub fn close_tour(&mut self) -> Result<()> {
         ensure!(

@@ -99,6 +99,11 @@ pub async fn serve(
                     match event {
                         AgentEvent::Message(text) => broadcast(&mut peers, Event::Message { text }),
                         AgentEvent::Activity(text) => broadcast(&mut peers, Event::Activity { text }),
+                        AgentEvent::TourNavigate { tour_id, index } => {
+                            if let Err(e) = c.tour_jump(tour_id, index) {
+                                broadcast(&mut peers, Event::Error { text: e.to_string() });
+                            }
+                        }
                         AgentEvent::Failed(text) => {
                             backend.cancel().await;
                             c.failed()?;
@@ -110,7 +115,7 @@ pub async fn serve(
                                 tour.context("backend omitted proposal tour").and_then(|t| c.complete(t))
                             } else {
                                 c.busy = false;
-                                if let Some(t) = tour { c.repository_tour(t) } else { Ok(()) }
+                                if let Some(t) = tour { c.present_tour(t) } else { Ok(()) }
                             };
                             if let Err(e) = result {
                                 c.failed()?;
@@ -142,7 +147,7 @@ fn start(
     mode: WorkspaceMode,
     events: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<()> {
-    if mode == WorkspaceMode::ReadOnly && c.session.stage != Stage::Tour {
+    if mode == WorkspaceMode::ReadOnly && !c.session.pending_proposal {
         c.workspace.sync(&c.current()?)?;
     }
     let turn = Turn {
@@ -223,8 +228,7 @@ async fn handle(
         Action::TourNext => c.tour_move(1)?,
         Action::TourPrevious => c.tour_move(-1)?,
         Action::TourJump { index } => {
-            let now = c.tour().context("no active tour")?.current_stop;
-            c.tour_move(index as isize - now as isize)?;
+            c.tour_jump(c.tour().context("no active tour")?.id, index)?;
         }
         Action::TourClose => c.close_tour()?,
         Action::Apply => c.apply()?,

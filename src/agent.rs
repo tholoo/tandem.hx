@@ -20,6 +20,7 @@ pub struct Turn {
 pub enum AgentEvent {
     Message(String),
     Activity(String),
+    TourNavigate { tour_id: usize, index: usize },
     Complete(Option<TourDraft>),
     Failed(String),
 }
@@ -30,17 +31,26 @@ pub trait AgentBackend: Send {
 }
 /// A deliberately labeled offline demonstration, never selected implicitly.
 #[derive(Default)]
-pub struct MockBackend;
+pub struct MockBackend {
+    builds: usize,
+}
 impl AgentBackend for MockBackend {
     fn start(&mut self, turn: Turn, events: mpsc::UnboundedSender<AgentEvent>) -> Result<()> {
         if turn.mode == WorkspaceMode::Build {
             let path = turn.workspace.join("tandem-example.txt");
-            anyhow::ensure!(
-                !path.exists(),
-                "mock demo refuses to replace tandem-example.txt"
-            );
-            std::fs::write(path, "A proposal created in Tandem's shadow workspace.\n")?;
-            let tour=TourDraft{title:"A first proposal".into(),overview:"This offline demo adds one file. The real working tree is unchanged until Review.".into(),stops:vec![crate::protocol::TourStop{title:"The proposed file".into(),body:"This file exists in the shadow workspace. Review will apply it as an ordinary uncommitted file.".into(),file:"tandem-example.txt".into(),line:1}]};
+            if self.builds == 0 {
+                anyhow::ensure!(
+                    !path.exists(),
+                    "mock demo refuses to replace tandem-example.txt"
+                );
+                std::fs::write(&path, "A proposal created in Tandem's shadow workspace.\n")?;
+            } else {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
+                writeln!(file, "Offline revision {}.", self.builds + 1)?;
+            }
+            self.builds += 1;
+            let tour=TourDraft{title:format!("Offline proposal {}",self.builds),overview:"This offline demo creates or extends one file. The real working tree is unchanged until Review.".into(),stops:vec![crate::protocol::TourStop{title:"The proposed file".into(),body:"This file exists in the shadow workspace. Review will apply it as an ordinary uncommitted file.".into(),file:"tandem-example.txt".into(),line:1}]};
             events.send(AgentEvent::Complete(Some(tour)))?;
         } else if turn.prompt.to_lowercase().contains("tour") {
             let files = crate::workspace::capture(&turn.workspace)?;

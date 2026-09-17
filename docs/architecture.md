@@ -8,7 +8,7 @@ One Rust package provides a controller library and one executable. The controlle
 
 The controller owns `Discuss`, `Plan`, `Building`, `Tour`, and `Review`. Conversational agreement never calls Begin. Plan changes and revision feedback stay read-only until the user explicitly begins. The real working tree is written only by application/reversion in the controller. BUILD can edit the persistent shadow workspace autonomously.
 
-The hard pre-BUILD write gate is structural: the complete Codex runtime runs in Bubblewrap with a read-only host filesystem and read-only shadow source. BUILD changes only the shadow mount to writable. Git metadata stays read-only. Codex receives explicit per-turn sandbox policy and no escalation approval. Failure to establish this environment is an error, never an unsandboxed fallback. Runtime state has a separate private writable directory. External MCP servers/plugins/hooks are excluded, since an external service is outside this filesystem boundary.
+The hard pre-BUILD write gate is structural: the complete Codex runtime runs in Bubblewrap with a read-only host filesystem and read-only shadow source. BUILD changes only the shadow mount to writable. Git metadata stays read-only. Codex receives explicit per-turn sandbox policy and no escalation approval. Failure to establish this environment is an error, never an unsandboxed fallback. Runtime state has a separate private writable directory, and BUILD commands have isolated temporary scratch space. Command network access is disabled; permission-expansion UI is deferred. External MCP servers/plugins/hooks are excluded, since an external service is outside this filesystem boundary.
 
 ## Git and proposals
 
@@ -18,13 +18,15 @@ Snapshots are Git tree objects, never commits. Proposal IDs refer to immutable b
 
 Apply/revert uses BASE, intended result, and current disk state. Non-overlapping text edits merge; overlapping text edits, binary changes, creations/deletions, and unsupported paths fail explicitly before writes. Text hunks are independently reversible. Writes are preflighted, files are replaced atomically, and ordinary IO failure triggers a guarded rollback. There is no claim of a cross-process, multi-file filesystem transaction: users must save and avoid simultaneous writes during application. Unsaved Helix buffers block consequential transitions.
 
-Human edits after application are carried into the next build baseline. A reverse-merge conflict probe rejects proposals that overwrite those choices. Older proposals are reconciled with recorded human choices before application. Conflicts leave the real files untouched; no conflict markers are silently written into them.
+Human edits after application are carried into the next build baseline. A reverse-merge conflict probe rejects proposals that overwrite those choices. Human deltas are composed newest-first for the probe so a later manual choice supersedes an earlier one. Unapplied proposals remain the starting implementation for revision builds, with current real-workspace edits merged in. Older proposals are reconciled with recorded human choices before application. Conflicts leave the real files untouched; no conflict markers are silently written into them.
 
 ## Independent tours
 
 A Tour has an identity, source (`Repository` or `Proposal(id)`), overview, ordered stops, and current stop. Proposals do not contain tours. Repository tours are temporary activities within DISCUSS or PLAN, preserving that stage when closed. Proposal completion creates a tour and enters the visible TOUR stage. Both use identical navigation and rendering.
 
 Tour order follows an explanation or execution story, not filesystem order. Duplicate locations are valid. Narration lives in a temporary editor-local card, never in a permanent assistant/Zellij pane. Normal conversation receives current editor context, stage, active proposal, active tour, and current stop automatically. No special question hotkey exists.
+
+Conversational refinements replace the narration while retaining its repository/proposal source. The backend can request a stop in the active tour; the controller checks the tour identity and bounds before navigating. This narrow capability cannot begin BUILD or apply code. Questions about code leave the current tour in place.
 
 ## Deliberate limits
 

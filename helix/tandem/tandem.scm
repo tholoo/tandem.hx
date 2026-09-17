@@ -129,7 +129,8 @@
         (set-box! generation (field next 'generation 0))
         (set-box! navigating #t)
         ;; External apply/revert never reloads over unsaved edits.
-        (when (equal? (field next 'stage "") "review")
+        (when (or (equal? (field next 'stage "") "review")
+                  (equal? (field next 'stage "") "tour"))
           (for-each (lambda (doc)
                       (when (and (editor-document->path doc) (path-exists? (editor-document->path doc)) (not (editor-document-dirty? doc)))
                         (editor-document-reload doc)))
@@ -164,5 +165,14 @@
 (register-hook 'post-insert-char (lambda (_) (publish-context)))
 (register-hook 'post-command (lambda (_) (publish-context)))
 (register-hook 'selection-did-change (lambda (_) (publish-context)))
-(register-hook 'document-saved (lambda (_) (publish-context)))
+;; This Helix version emits document-saved when the asynchronous save starts.
+;; Refresh after completion; bound retries if saving fails or editing continues.
+(define (refresh-after-save doc attempts)
+  (enqueue-thread-local-callback-with-delay 100
+    (lambda ()
+      (publish-context)
+      (when (and (> attempts 0) (member doc (editor-all-documents))
+                 (editor-document-dirty? doc))
+        (refresh-after-save doc (- attempts 1))))))
+(register-hook 'document-saved (lambda (doc) (refresh-after-save doc 49)))
 (register-hook 'terminal-focus-lost publish-context)
