@@ -1,0 +1,21 @@
+[package]
+name = "tandem"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Human-controlled implementation proposals beside Helix"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+crossterm = "0.29"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+toml = "0.9"
+
+[profile.release]
+lto = "thin"
+strip = true
