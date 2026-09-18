@@ -6,10 +6,9 @@ pub const MAX_FRAME: usize = 1024 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Discuss,
-    Plan,
     Building,
     Tour,
-    Review,
+    Applied,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EditorContext {
@@ -21,6 +20,10 @@ pub struct EditorContext {
     #[serde(default)]
     pub selection: String,
     #[serde(default)]
+    pub selection_start_line: Option<usize>,
+    #[serde(default)]
+    pub selection_end_line: Option<usize>,
+    #[serde(default)]
     pub nearby: String,
     #[serde(default)]
     pub dirty: Vec<String>,
@@ -31,6 +34,8 @@ pub struct TourStop {
     pub body: String,
     pub file: String,
     pub line: usize,
+    /// Inclusive, 1-based end of the reading range.
+    pub end_line: usize,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TourDraft {
@@ -89,9 +94,9 @@ pub struct Location {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
     Status,
+    Input { text: String },
     Message { text: String },
-    Plan { text: String },
-    Begin,
+    Begin { text: String },
     Revise { feedback: String },
     Switch { proposal: usize },
     TourNext,
@@ -103,7 +108,9 @@ pub enum Action {
     PreviousChange,
     Revert { change: usize },
     Diff,
+    Peek,
     Context { context: EditorContext },
+    EditorConnection { connected: bool },
     Cancel,
     Shutdown,
 }
@@ -115,16 +122,32 @@ pub struct Request {
     pub action: Action,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Comparison {
+    pub file: String,
+    pub current_file: String,
+    pub old: Option<String>,
+    pub current: Option<String>,
+    pub old_line: usize,
+    pub current_line: usize,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Payload {
+    pub text: Option<String>,
+    pub comparison: Option<Comparison>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Response {
     pub version: u32,
     pub id: u64,
     pub view: Option<View>,
     pub error: Option<String>,
-    pub text: Option<String>,
+    #[serde(flatten)]
+    pub reply: Payload,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    History { lines: Vec<String> },
     State { view: Box<View> },
     Message { text: String },
     Activity { text: String },

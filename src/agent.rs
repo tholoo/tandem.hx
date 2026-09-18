@@ -8,6 +8,7 @@ pub mod codex;
 pub enum WorkspaceMode {
     ReadOnly,
     Build,
+    Refine,
 }
 #[derive(Clone, Debug)]
 pub struct Turn {
@@ -36,7 +37,9 @@ pub struct MockBackend {
 }
 impl AgentBackend for MockBackend {
     fn start(&mut self, turn: Turn, events: mpsc::UnboundedSender<AgentEvent>) -> Result<()> {
-        if turn.mode == WorkspaceMode::Build {
+        if turn.mode == WorkspaceMode::Build
+            || (turn.mode == WorkspaceMode::Refine && turn.prompt.to_lowercase().contains("change"))
+        {
             let path = turn.workspace.join("tandem-example.txt");
             if self.builds == 0 {
                 anyhow::ensure!(
@@ -50,7 +53,7 @@ impl AgentBackend for MockBackend {
                 writeln!(file, "Offline revision {}.", self.builds + 1)?;
             }
             self.builds += 1;
-            let tour=TourDraft{title:format!("Offline proposal {}",self.builds),overview:"This offline demo creates or extends one file. The real working tree is unchanged until Review.".into(),stops:vec![crate::protocol::TourStop{title:"The proposed file".into(),body:"This file exists in the shadow workspace. Review will apply it as an ordinary uncommitted file.".into(),file:"tandem-example.txt".into(),line:1}]};
+            let tour=TourDraft{title:format!("Offline proposal {}",self.builds),overview:"This offline demo creates or extends one file. The real working tree is unchanged until /apply.".into(),stops:vec![crate::protocol::TourStop{title:"The proposed file".into(),body:"This file exists in the shadow workspace. /apply will apply it as an ordinary uncommitted file.".into(),file:"tandem-example.txt".into(),line:1,end_line:1}]};
             events.send(AgentEvent::Complete(Some(tour)))?;
         } else if turn.prompt.to_lowercase().contains("tour") {
             let files = crate::workspace::capture(&turn.workspace)?;
@@ -59,7 +62,7 @@ impl AgentBackend for MockBackend {
                 .find(|p| !p.starts_with('.'))
                 .ok_or_else(|| anyhow::anyhow!("no files to tour"))?
                 .clone();
-            let stop=crate::protocol::TourStop {title:"Explore existing code".into(),body:"Offline demonstration: this stop points into an existing repository file. Codex supplies the conceptual narrative in live sessions.".into(),file,line:1};
+            let stop=crate::protocol::TourStop {title:"Explore existing code".into(),body:"Offline demonstration: this stop points into an existing repository file. Codex supplies the conceptual narrative in live sessions.".into(),file,line:1,end_line:1};
             events.send(AgentEvent::Complete(Some(TourDraft {
                 title: "Repository tour (offline demo)".into(),
                 overview: "A read-only tour, independent of any proposal.".into(),
@@ -74,7 +77,10 @@ impl AgentBackend for MockBackend {
                 ],
             })))?;
         } else {
-            events.send(AgentEvent::Message(format!("[offline mock] {}\nSelect /plan <description>, then /begin to create a demo proposal.",turn.prompt)))?;
+            events.send(AgentEvent::Message(format!(
+                "[offline mock] {}\nDiscuss the change, then use /begin to create a demo proposal.",
+                turn.prompt
+            )))?;
             events.send(AgentEvent::Complete(None))?;
         }
         Ok(())

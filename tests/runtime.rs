@@ -38,7 +38,11 @@ async fn runtime_enforces_source_capabilities() {
     let h = t.path().join("home");
     fs::create_dir(&h).unwrap();
     fs::write(h.join("config.toml"), "").unwrap();
-    for mode in [WorkspaceMode::ReadOnly, WorkspaceMode::Build] {
+    for mode in [
+        WorkspaceMode::ReadOnly,
+        WorkspaceMode::Build,
+        WorkspaceMode::Refine,
+    ] {
         let result = sandbox_command(&h, &c.workspace.shadow, mode, Path::new("sh"))
             .args(["-c", "printf 'proposal\\n' > app.txt"])
             .output()
@@ -123,6 +127,16 @@ async fn socket_workflow_with_backend_and_repository_tour() {
     assert!(view.proposal.is_none());
     send(&socket, Action::TourNext).await;
     send(&socket, Action::TourClose).await;
+    let removed = server::request(
+        &socket,
+        Action::Input {
+            text: "/plan example".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(removed.error.is_some());
+    assert_eq!(removed.view.unwrap().stage, Stage::Discuss);
     send(
         &socket,
         Action::Message {
@@ -133,24 +147,38 @@ async fn socket_workflow_with_backend_and_repository_tour() {
     assert_eq!(idle(&socket).await.stage, Stage::Discuss);
     send(
         &socket,
-        Action::Plan {
+        Action::Message {
             text: "add demo file".into(),
         },
     )
     .await;
     idle(&socket).await;
-    send(&socket, Action::Begin).await;
-    assert_eq!(idle(&socket).await.stage, Stage::Tour);
-    assert!(!t.path().join("repo/tandem-example.txt").exists());
     send(
         &socket,
-        Action::Revise {
-            feedback: "revise before application".into(),
+        Action::Input {
+            text: "/begin".into(),
         },
     )
     .await;
-    idle(&socket).await;
-    send(&socket, Action::Begin).await;
+    assert_eq!(idle(&socket).await.stage, Stage::Tour);
+    let removed = server::request(
+        &socket,
+        Action::Input {
+            text: "/review".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(removed.error.is_some());
+    assert_eq!(removed.view.unwrap().stage, Stage::Tour);
+    assert!(!t.path().join("repo/tandem-example.txt").exists());
+    send(
+        &socket,
+        Action::Input {
+            text: "change before application".into(),
+        },
+    )
+    .await;
     let revised = idle(&socket).await;
     assert_eq!(revised.proposal, Some(2));
     assert!(
@@ -160,7 +188,13 @@ async fn socket_workflow_with_backend_and_repository_tour() {
     );
     assert!(!t.path().join("repo/tandem-example.txt").exists());
     send(&socket, Action::Switch { proposal: 1 }).await;
-    send(&socket, Action::Apply).await;
+    send(
+        &socket,
+        Action::Input {
+            text: "/apply".into(),
+        },
+    )
+    .await;
     assert!(t.path().join("repo/tandem-example.txt").exists());
     send(&socket, Action::Revert { change: 0 }).await;
     assert!(!t.path().join("repo/tandem-example.txt").exists());

@@ -19,9 +19,9 @@
             postInstall = ''
               wrapProgram $out/bin/tandem --set-default TANDEM_BWRAP ${pkgs.bubblewrap}/bin/bwrap --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.bubblewrap ]}
               mkdir -p $out/share/tandem
-              cp -r helix examples $out/share/tandem/
+              cp -r helix $out/share/tandem/
             '';
-            meta = { description = "Human-controlled coding proposals beside Helix"; license = pkgs.lib.licenses.mit; mainProgram = "tandem"; platforms = systems; };
+            meta = { description = "Human-controlled coding proposals inside Helix"; license = pkgs.lib.licenses.mit; mainProgram = "tandem"; platforms = systems; };
           };
         });
       apps = eachSystem (system: {
@@ -31,7 +31,7 @@
       devShells = eachSystem (system:
         let pkgs = pkgsFor system; in {
           default = pkgs.mkShell {
-            packages = with pkgs; [ cargo rustc rustfmt clippy rust-analyzer git bubblewrap ];
+            packages = with pkgs; [ cargo rustc rustfmt clippy rust-analyzer git bubblewrap (python3.withPackages (ps: [ ps.pyte ])) ];
             TANDEM_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           };

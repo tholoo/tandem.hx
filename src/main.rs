@@ -1,4 +1,3 @@
-mod tui;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -6,16 +5,23 @@ use tandem::{
     agent::{AgentBackend, MockBackend, codex::CodexBackend},
     controller::Controller,
     protocol::Action,
-    server,
+    server, session,
 };
 #[derive(Parser)]
-#[command(version, about = "Human-controlled coding proposals beside Helix")]
+#[command(version, about = "Human-controlled coding proposals inside Helix")]
 struct Args {
     #[command(subcommand)]
     command: Option<Cmd>,
 }
 #[derive(Subcommand)]
 enum Cmd {
+    /// Start/reconnect from a Steel editor and carry its JSONL connection.
+    Editor {
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        #[arg(long)]
+        mock: bool,
+    },
     /// Start a controller and establish a persistent shadow workspace.
     Start {
         #[arg(default_value = ".")]
@@ -27,21 +33,11 @@ enum Cmd {
         #[arg(long, default_value = "codex")]
         codex: PathBuf,
     },
-    /// Open the conversation TUI in a second terminal/Zellij pane.
-    Chat {
-        #[arg(env = "TANDEM_SOCKET")]
-        socket: PathBuf,
-    },
     /// Send a JSON action to the controller (useful for scripting/debugging).
     Send {
         #[arg(env = "TANDEM_SOCKET")]
         socket: PathBuf,
         json: String,
-    },
-    /// JSONL stdio transport for the Steel plugin. Does not control the editor.
-    Bridge {
-        #[arg(env = "TANDEM_SOCKET")]
-        socket: PathBuf,
     },
 }
 #[tokio::main]
@@ -59,6 +55,8 @@ async fn main() -> Result<()> {
             mock,
             codex,
         }) => {
+            let registry = session::Registry::discover(&project)?;
+            let _controller = registry.controller_lock()?;
             let session = if let Some(p) = session {
                 if p.is_absolute() {
                     p
@@ -66,15 +64,7 @@ async fn main() -> Result<()> {
                     std::env::current_dir()?.join(p)
                 }
             } else {
-                let root = std::env::var_os("XDG_RUNTIME_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(std::env::temp_dir)
-                    .join("tandem");
-                std::fs::create_dir_all(&root)?;
-                tempfile::Builder::new()
-                    .prefix("session-")
-                    .tempdir_in(root)?
-                    .keep()
+                registry.new_session()?
             };
             let c = Controller::create(&project, &session)?;
             let backend: Box<dyn AgentBackend> = if mock {
@@ -83,12 +73,12 @@ async fn main() -> Result<()> {
                 Box::new(CodexBackend::new(&session, codex)?)
             };
             let socket = session.join("controller.sock");
+            registry.publish(&socket)?;
             println!(
-                "Tandem {}\nSession: {}\nShadow: {}\nSocket: {}\n\nIn the assistant pane: tandem chat '{}'\nSet TANDEM_SOCKET to this socket before starting Steel Helix.\n{}",
+                "Tandem {}\nSession: {}\nShadow: {}\nSocket: {}\n\nRun :tandem in Steel Helix to connect.\n{}",
                 env!("CARGO_PKG_VERSION"),
                 session.display(),
                 c.workspace.shadow.display(),
-                socket.display(),
                 socket.display(),
                 if mock {
                     "Offline mock backend selected."
@@ -98,8 +88,14 @@ async fn main() -> Result<()> {
             );
             server::serve(c, backend, &socket).await?;
         }
-        Some(Cmd::Chat { socket }) => tui::run(&socket).await?,
-        Some(Cmd::Bridge { socket }) => server::bridge(&socket).await?,
+        Some(Cmd::Editor { project, mock }) => {
+            if let Err(error) = session::editor(&project, mock).await {
+                println!(
+                    "{}",
+                    serde_json::json!({"event":"error", "text":format!("{error:#}")})
+                );
+            }
+        }
         Some(Cmd::Send { socket, json }) => {
             let action: Action = serde_json::from_str(&json)
                 .context("expected an action such as {\"action\":\"status\"}")?;

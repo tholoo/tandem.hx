@@ -72,18 +72,28 @@ try:
     assert state["stage"] == "discuss"
     print("PASS: conversational navigation preserves the active tour and stage", flush=True)
     send("tour_close")
-    send("plan", text="Change app.txt from hello to hi, keeping the trailing newline. Check the file with cat.")
-    assert idle()["stage"] == "plan"
-    send("begin")
+    send("input", text="/begin Change app.txt from hello to hi, keeping the trailing newline. Check the file with cat.")
     state = idle()
     assert state["stage"] == "tour"
     assert (repo / "app.txt").read_text() == "hello\n"
     assert (session / "worktree/app.txt").read_text() == "hi\n"
-    send("apply")
-    assert (repo / "app.txt").read_text() == "hi\n"
+    send("tour_next")
+    before = send("status")
+    send("message", text="Why did you choose this wording? Just explain; don't change any files or the tour.")
+    state = idle()
+    assert state["proposal"] == before["proposal"] and state["tour"] == before["tour"]
+    assert (session / "worktree/app.txt").read_text() == "hi\n"
+    (session / "worktree/app.txt").write_text("hi\nmanual note\n")
+    send("message", text="Change the first line of app.txt from hi to hey. Preserve the manual note and trailing newline. Implement this refinement now.")
+    state = idle()
+    assert state["stage"] == "tour" and state["proposal"] == 2
+    assert (session / "worktree/app.txt").read_text() == "hey\nmanual note\n"
+    assert (repo / "app.txt").read_text() == "hello\n"
+    send("input", text="/apply")
+    assert (repo / "app.txt").read_text() == "hey\nmanual note\n"
     send("revert", change=0)
     assert (repo / "app.txt").read_text() == "hello\n"
-    print("PASS: live plan → shadow build → proposal tour → apply → revert", flush=True)
+    print("PASS: live discussion → shadow build → editable proposal → conversational refinement → apply → revert", flush=True)
 finally:
     conn.close()
     process.terminate()
