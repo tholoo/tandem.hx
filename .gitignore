@@ -7,3 +7,10 @@
 
 __pycache__/
 *.py[cod]
+
+# Local tooling and recordings
+.pre-commit-cache/
+.ruff_cache/
+.env
+.env.*
+*.log

@@ -1,4 +1,5 @@
 """Screen observation for headless Steelix checks (requires pyte)."""
+
 import pyte
 
 

@@ -3,8 +3,13 @@ name = "tandem"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Human-controlled implementation proposals inside Helix"
+description = "Guided code tours and reviewable AI edits inside Helix"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/tholoo/tandem.hx"
+keywords = ["helix", "ai", "code-review", "tours"]
+categories = ["development-tools"]
+publish = false
 
 [dependencies]
 anyhow = "1"

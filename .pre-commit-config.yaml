@@ -1,0 +1,43 @@
+minimum_pre_commit_version: "3.2.0"
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+repos:
+  - repo: local
+    hooks:
+      - id: format
+        name: Check formatting
+        entry: python3 scripts/format.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: ruff
+        name: Lint Python
+        entry: ruff check
+        language: system
+        types: [python]
+      - id: actionlint
+        name: Validate GitHub Actions
+        entry: actionlint
+        language: system
+        files: ^\.github/workflows/.*\.ya?ml$
+        pass_filenames: false
+      - id: gitleaks
+        name: Scan staged changes for secrets
+        entry: gitleaks git --staged --redact --no-banner
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: clippy
+        name: Clippy
+        entry: cargo clippy --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: tests
+        name: Rust tests
+        entry: cargo test
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

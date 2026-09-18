@@ -31,14 +31,14 @@ In normal mode, `]t` goes forward and `[t` goes back: tour stops while a tour is
 
 Additional normal-mode defaults are installed under Space t, with existing custom bindings taking precedence. Press Space t to see each key's description:
 
-| Keys | Action | Conversation command |
-| --- | --- | --- |
-| Space t p | Toggle old/current comparison at the cursor | `/peek` |
-| Space t r | Return to the current tour stop after exploring | `/return` |
-| Space t j | Fuzzy-search tour stops; arrows or Ctrl-n/p select, Enter jumps, Esc closes | `/stops` |
-| Space t e | Expand the draft into a native Helix message buffer | `/compose` or Ctrl+X in chat |
-| Space t s | Send the expanded message | |
-| Space t q | Return to chat and keep the expanded draft | |
+| Keys      | Action                                                                      | Conversation command         |
+| --------- | --------------------------------------------------------------------------- | ---------------------------- |
+| Space t p | Toggle old/current comparison at the cursor                                 | `/peek`                      |
+| Space t r | Return to the current tour stop after exploring                             | `/return`                    |
+| Space t j | Fuzzy-search tour stops; arrows or Ctrl-n/p select, Enter jumps, Esc closes | `/stops`                     |
+| Space t e | Expand the draft into a native Helix message buffer                         | `/compose` or Ctrl+X in chat |
+| Space t s | Send the expanded message                                                   |                              |
+| Space t q | Return to chat and keep the expanded draft                                  |                              |
 
 The message buffer supports normal Helix editing and multiline text. Escape switches it to normal mode. Closing it with `:bc!` also keeps its draft. The source context stays on the code you were looking at when you opened it. Comparison uses saved contents: old code on the left, current code on the right, with chat temporarily hidden. Use Ctrl-w h/l to switch panes and Space t p again to restore your previous splits, cursor, and chat. The current file stays editable; the old side is a disposable scratch snapshot. Both panes start at the selected changed block and scroll independently. Save the current buffer before opening comparison.
 
@@ -63,3 +63,9 @@ The thin plugin uses native clipping, component, event, cursor, and editor-comma
 An isolated check launches the actual editor in a PTY and invokes native functions to validate automatic startup, conversation input/rendering, both tour sources, editor context, navigation, ordinary editing, revisions, application/reversion, and stopping. It never sends terminal key sequences into Helix. A separate screen-level check uses pyte (included in `nix develop`) to assert distinct label/command colors, centered destinations, top narration, and clean forced quit.
 
 These plugin interfaces remain experimental.
+
+## Runtime compatibility
+
+Use the runtime shipped for your Steelix build, with matching grammar binaries and query files. A mismatch can disable syntax highlighting even when `hx --health rust` finds the parser. Helix's log may report `Failed to compile highlights` and an invalid node type.
+
+The test and recording scripts place the supplied runtime in their isolated Helix configuration, so it takes precedence over wrapper-provided runtime paths. This affects only the disposable test editor. The plugin does not replace your installed editor runtime.

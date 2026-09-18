@@ -1,0 +1,15 @@
+name: Feature idea
+description: Suggest a focused improvement.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Start with the workflow or problem, rather than a proposed command.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could Tandem help?
+      description: A short example interaction is welcome.

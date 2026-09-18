@@ -3,17 +3,15 @@
 Usage: scripts/check-helix.py /path/to/steel/hx /path/to/helix/runtime [tandem]
 All repositories, editor configuration, and logs are isolated temporary fixtures.
 """
+
 import codecs
-import pyte
-from terminal_screen import Screen
 import fcntl
 import json
 import os
-from pathlib import Path
 import pty
 import select
-import shutil
 import shlex
+import shutil
 import socket
 import struct
 import subprocess
@@ -21,9 +19,15 @@ import sys
 import tempfile
 import termios
 import time
+from pathlib import Path
+
+import pyte
+from terminal_screen import Screen
 
 hx, runtime = map(lambda p: str(Path(p).resolve()), sys.argv[1:3])
-binary = str(Path(sys.argv[3] if len(sys.argv) > 3 else "target/debug/tandem").resolve())
+binary = str(
+    Path(sys.argv[3] if len(sys.argv) > 3 else "target/debug/tandem").resolve()
+)
 plugin = Path(binary).resolve().parent.parent / "share/tandem/helix/tandem/tandem.scm"
 if not plugin.exists():
     plugin = Path(__file__).resolve().parents[1] / "helix/tandem/tandem.scm"
@@ -33,14 +37,32 @@ repo.mkdir()
 subprocess.run(["git", "init", "-q", str(repo)], check=True)
 (repo / "app.txt").write_text("entry point\nrequest handler\ndatabase\n")
 subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
-subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+subprocess.run(
+    [
+        "git",
+        "-C",
+        str(repo),
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "fixture",
+    ],
+    check=True,
+)
 session = None
 sock = None
 runtime_dir = root / "run"
 helper_dir = root / "bin"
 helper_dir.mkdir()
 (helper_dir / "tandem").write_text(
-    "#!/bin/sh\nif [ \"$1\" = editor ]; then exec " + shlex.quote(binary) + " \"$@\" --mock; fi\nexec " + shlex.quote(binary) + " \"$@\"\n"
+    '#!/bin/sh\nif [ "$1" = editor ]; then exec '
+    + shlex.quote(binary)
+    + ' "$@" --mock; fi\nexec '
+    + shlex.quote(binary)
+    + ' "$@"\n'
 )
 (helper_dir / "tandem").chmod(0o700)
 editor = None
@@ -50,11 +72,16 @@ screen = Screen(100, 35)
 terminal_stream = pyte.Stream(screen)
 decoder = codecs.getincrementaldecoder("utf8")("replace")
 
+
 def request(action, **kwargs):
     with socket.socket(socket.AF_UNIX) as conn:
         conn.settimeout(5)
         conn.connect(str(sock))
-        conn.sendall((json.dumps(dict(version=1, id=77, action=action, **kwargs)) + "\n").encode())
+        conn.sendall(
+            (
+                json.dumps(dict(version=1, id=77, action=action, **kwargs)) + "\n"
+            ).encode()
+        )
         reader = conn.makefile("rb")
         while True:
             line = reader.readline()
@@ -65,6 +92,7 @@ def request(action, **kwargs):
                 if reply.get("error"):
                     raise RuntimeError(reply["error"])
                 return reply["view"]
+
 
 def drain():
     if master is not None:
@@ -78,13 +106,16 @@ def drain():
             capture.extend(data)
             terminal_stream.feed(decoder.decode(data))
 
+
 def wait_for(predicate, name):
     global sock, session
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         drain()
         if b"error[E" in capture:
-            raise RuntimeError("Steel error; inspect terminal.bin in the retained fixture")
+            raise RuntimeError(
+                "Steel error; inspect terminal.bin in the retained fixture"
+            )
         if sock is None:
             addresses = list(runtime_dir.glob("checkout-*/active.json"))
             if addresses:
@@ -99,9 +130,10 @@ def wait_for(predicate, name):
         time.sleep(0.1)
     raise RuntimeError(f"timed out: {name}")
 
+
 def wait_render(text):
-    deadline=time.monotonic()+10
-    while time.monotonic()<deadline:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
         drain()
         if text.encode() in capture or text in "\n".join(screen.display):
             return
@@ -110,19 +142,23 @@ def wait_render(text):
         time.sleep(0.05)
     raise RuntimeError(f"narration was not rendered: {text}")
 
+
 try:
     config = root / "config"
     config.mkdir()
+    (config / "runtime").symlink_to(Path(runtime).resolve(), target_is_directory=True)
     shutil.copytree(plugin.parent, config / "tandem", copy_function=shutil.copyfile)
     # Exercise the component's own input/submit functions, never Helix keystrokes.
     with (config / "tandem/chat.scm").open("a") as stream:
-        stream.write("\n(provide insert submit focused pulse ticking session-view history draft caret completions complete-command)\n")
+        stream.write(
+            "\n(provide insert submit focused pulse ticking session-view history draft caret completions complete-command)\n"
+        )
     with (config / "tandem/overlay.scm").open("a") as stream:
         stream.write("\n(provide query accept)\n")
     with (config / "tandem/comparison.scm").open("a") as stream:
         stream.write("\n(provide views state)\n")
     (config / "helix.scm").write_text("")
-    (config / "init.scm").write_text(f'''(require "tandem/tandem.scm")
+    (config / "init.scm").write_text(f"""(require "tandem/tandem.scm")
 (require "helix/ext.scm")
 (require "helix/misc.scm")
 (require "helix/keymaps.scm")
@@ -286,23 +322,51 @@ try:
               (assert! (equal? (query-global-keymap "normal" '("]" "t")) "goto_next_class"))
               (set-status! "NAVIGATION-KEYS-RESTORED")))))
           (begin (time/sleep-ms 50) (wait-stop))))))
-''')
-    (config / "config.toml").write_text('[editor]\ntrue-color = true\ninsecure = true\n[keys.normal.space.t]\ne = ["move_char_left", "move_char_right"]\n')
+""")
+    (config / "config.toml").write_text(
+        '[editor]\ntrue-color = true\ninsecure = true\n[keys.normal.space.t]\ne = ["move_char_left", "move_char_right"]\n'
+    )
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 35, 100, 0, 0))
-    env = dict(os.environ, HELIX_STEEL_CONFIG=str(config), HELIX_RUNTIME=runtime,
-               STEEL_HOME=str(root / "steel"), TANDEM_RUNTIME_DIR=str(runtime_dir), TERM="xterm-256color",
-               PATH=str(helper_dir) + ":" + os.environ["PATH"])
+    env = dict(
+        os.environ,
+        HELIX_STEEL_CONFIG=str(config),
+        HELIX_RUNTIME=runtime,
+        STEEL_HOME=str(root / "steel"),
+        TANDEM_RUNTIME_DIR=str(runtime_dir),
+        TERM="xterm-256color",
+        PATH=str(helper_dir) + ":" + os.environ["PATH"],
+    )
     for key in ["TANDEM_SOCKET", "ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID"]:
         env.pop(key, None)
-    editor = subprocess.Popen([hx, "-c", str(config / "config.toml"), "--log", str(root / "helix.log"), str(repo / "app.txt")], stdin=slave, stdout=slave, stderr=slave, env=env, cwd=repo, start_new_session=True)
+    editor = subprocess.Popen(
+        [
+            hx,
+            "-c",
+            str(config / "config.toml"),
+            "--log",
+            str(root / "helix.log"),
+            str(repo / "app.txt"),
+        ],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=env,
+        cwd=repo,
+        start_new_session=True,
+    )
     os.close(slave)
-    wait_for(lambda v: v["editor"]["file"] == str(repo / "app.txt"), "automatic editor context")
+    wait_for(
+        lambda v: v["editor"]["file"] == str(repo / "app.txt"),
+        "automatic editor context",
+    )
     wait_render("Tandem")
     (root / "ui-now").touch()
     wait_render("Working")
     wait_render("NATIVE-UI-CHECK-PASS")
-    assert sum(glyph.encode() in capture for glyph in ["⠋", "⠙", "⠹", "⠸", "⠼"]) >= 2, "spinner did not animate on screen"
+    assert sum(glyph.encode() in capture for glyph in ["⠋", "⠙", "⠹", "⠸", "⠼"]) >= 2, (
+        "spinner did not animate on screen"
+    )
     (root / "completion-now").touch()
     wait_render("Tab complete")
     wait_render("no pending preview")
@@ -333,9 +397,14 @@ try:
     wait_for(lambda v: v["tour"]["current_stop"] == 2, "picker jump")
     (root / "return-now").touch()
     wait_render("RETURN-REQUESTED")
-    wait_for(lambda v: v["editor"]["line"] == 1 and v["tour"]["current_stop"] == 2, "return to current stop")
+    wait_for(
+        lambda v: v["editor"]["line"] == 1 and v["tour"]["current_stop"] == 2,
+        "return to current stop",
+    )
     request("tour_close")
-    restored = wait_for(lambda v: v["editor"]["line"] == 2, "restore location before repository tour")
+    restored = wait_for(
+        lambda v: v["editor"]["line"] == 2, "restore location before repository tour"
+    )
     assert restored["editor"]["selection"] == pinned["selection"]
     request("input", text="Add the demo file")
     wait_for(lambda v: not v["busy"], "discussion completion")
@@ -343,7 +412,10 @@ try:
     wait_for(lambda v: v["stage"] == "tour", "proposal tour")
     assert not (repo / "tandem-example.txt").exists()
     request("tour_next")
-    wait_for(lambda v: v["editor"]["file"] == str(session / "worktree/tandem-example.txt"), "native shadow navigation")
+    wait_for(
+        lambda v: v["editor"]["file"] == str(session / "worktree/tandem-example.txt"),
+        "native shadow navigation",
+    )
     wait_render("The proposed file")
     (root / "preview-edit-now").touch()
     wait_for(lambda v: v["editor"]["dirty"], "unsaved preview edit")
@@ -364,21 +436,53 @@ try:
     unchanged = wait_for(lambda v: not v["busy"], "proposal question")
     assert unchanged["proposal"] == 1 and unchanged["tour"]["current_stop"] == 1
     request("input", text="Change this proposal by adding a revision")
-    wait_for(lambda v: not v["busy"] and v["proposal"] == 2, "conversational proposal revision")
+    wait_for(
+        lambda v: not v["busy"] and v["proposal"] == 2,
+        "conversational proposal revision",
+    )
     assert not (repo / "tandem-example.txt").exists()
     request("tour_next")
-    wait_for(lambda v: "Offline revision 2" in v["editor"]["nearby"], "refresh existing shadow buffer")
-    assert (session / "worktree/tandem-example.txt").read_text().startswith("human preview edit")
+    wait_for(
+        lambda v: "Offline revision 2" in v["editor"]["nearby"],
+        "refresh existing shadow buffer",
+    )
+    assert (
+        (session / "worktree/tandem-example.txt")
+        .read_text()
+        .startswith("human preview edit")
+    )
     request("input", text="/apply")
-    wait_for(lambda v: v["stage"] == "applied" and v["editor"]["file"] == str(repo / "tandem-example.txt") and "Offline revision 2" in v["editor"]["nearby"], "apply refined preview")
+    wait_for(
+        lambda v: (
+            v["stage"] == "applied"
+            and v["editor"]["file"] == str(repo / "tandem-example.txt")
+            and "Offline revision 2" in v["editor"]["nearby"]
+        ),
+        "apply refined preview",
+    )
     assert (repo / "tandem-example.txt").read_text().startswith("human preview edit")
     request("switch", proposal=1)
     request("tour_next")
-    wait_for(lambda v: v["editor"]["file"] == str(session / "worktree/tandem-example.txt") and "Offline revision 2" not in v["editor"]["nearby"], "restore previous preview")
+    wait_for(
+        lambda v: (
+            v["editor"]["file"] == str(session / "worktree/tandem-example.txt")
+            and "Offline revision 2" not in v["editor"]["nearby"]
+        ),
+        "restore previous preview",
+    )
     request("input", text="/apply")
-    wait_for(lambda v: v["editor"]["file"] == str(repo / "tandem-example.txt") and "Offline revision 2" not in v["editor"]["nearby"], "restore previous real version")
+    wait_for(
+        lambda v: (
+            v["editor"]["file"] == str(repo / "tandem-example.txt")
+            and "Offline revision 2" not in v["editor"]["nearby"]
+        ),
+        "restore previous real version",
+    )
     (root / "edit-now").touch()
-    wait_for(lambda v: str(repo / "app.txt") in v["editor"]["dirty"], "unsaved editor context")
+    wait_for(
+        lambda v: str(repo / "app.txt") in v["editor"]["dirty"],
+        "unsaved editor context",
+    )
     try:
         request("revert", change=0)
         raise AssertionError("revert should require saving the dirty buffer")
@@ -399,7 +503,9 @@ try:
     assert not sock.exists(), "native stop did not shut down the controller"
     assert editor.poll() is None, "stopping Tandem should leave Helix open"
     wait_render("NAVIGATION-KEYS-RESTORED")
-    print(f"PASS: native chat/completion, multiline draft retention, selection context/restoration, tour picker/return, native comparison/layout restoration, custom keys, refinement, apply/revert, and stop. Logs: {root}")
+    print(
+        f"PASS: native chat/completion, multiline draft retention, selection context/restoration, tour picker/return, native comparison/layout restoration, custom keys, refinement, apply/revert, and stop. Logs: {root}"
+    )
 finally:
     if editor is not None:
         editor.terminate()

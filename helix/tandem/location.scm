@@ -6,13 +6,14 @@
 (provide bookmark restore)
 (define (bookmark)
   (hash 'doc (editor->doc-id (editor-focus)) 'selection (edit.current-selection-object)
-        'line (+ 1 (edit.get-current-line-number))))
+    'line
+    (+ 1 (edit.get-current-line-number))))
 (define (restore mark)
   (when (and mark (editor-doc-exists? (hash-ref mark 'doc)))
     (core.editor-switch-action! (hash-ref mark 'doc) (Action/Replace))
     (let* ([selection (hash-ref mark 'selection)]
            [length (text.rope-len-chars (editor->text (hash-ref mark 'doc)))])
       (if (null? (filter (lambda (range) (> (edit.range->to range) length)) (edit.selection->ranges selection)))
-          (edit.set-current-selection-object! selection)
-          (cmd.goto-line (min (hash-ref mark 'line) (text.rope-len-lines (editor->text (hash-ref mark 'doc))))))))
+        (edit.set-current-selection-object! selection)
+        (cmd.goto-line (min (hash-ref mark 'line) (text.rope-len-lines (editor->text (hash-ref mark 'doc))))))))
   void)

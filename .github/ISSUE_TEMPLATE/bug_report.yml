@@ -1,0 +1,29 @@
+name: Bug report
+description: Something did not work as expected.
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A small example repository or exact sequence of commands helps.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Tandem commit, Steelix version or revision, Codex version, Linux distribution, and installation method.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or relevant logs
+      description: Remove private source, credentials, and personal paths. Never attach the entire session directory or auth.json.

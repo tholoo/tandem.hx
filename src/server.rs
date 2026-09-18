@@ -306,10 +306,12 @@ async fn handle(
                 ..Payload::default()
             });
         }
-        Action::Peek => return Ok(Payload {
-            comparison: Some(c.peek()?),
-            ..Payload::default()
-        }),
+        Action::Peek => {
+            return Ok(Payload {
+                comparison: Some(c.peek()?),
+                ..Payload::default()
+            });
+        }
     }
     Ok(Payload::default())
 }

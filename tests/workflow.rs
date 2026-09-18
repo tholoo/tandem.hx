@@ -653,7 +653,12 @@ fn peek_uses_the_saved_draft_and_current_hunk_without_writing_real_files() {
     c.editor.line = 13;
     assert!(c.peek().unwrap().current_line > 1);
     c.editor.dirty.push(c.editor.file.clone().unwrap());
-    assert!(c.peek().unwrap_err().to_string().contains("save this buffer"));
+    assert!(
+        c.peek()
+            .unwrap_err()
+            .to_string()
+            .contains("save this buffer")
+    );
     c.editor.dirty.clear();
     assert_eq!(read(&c.workspace.real, "app.txt"), original);
     c.editor.file = Some("/tmp/outside.txt".into());
@@ -669,7 +674,10 @@ fn peek_handles_deletions_and_unchanged_locations() {
     c.editor.line = 1;
     let comparison = c.peek().unwrap();
     assert_eq!(comparison.old.as_deref(), Some(original));
-    assert_eq!(comparison.current.as_deref(), Some(original.trim_start_matches("a\n")));
+    assert_eq!(
+        comparison.current.as_deref(),
+        Some(original.trim_start_matches("a\n"))
+    );
     c.editor.line = 10;
     assert!(c.peek().unwrap_err().to_string().contains("no text change"));
 }

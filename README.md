@@ -1,70 +1,73 @@
 # Tandem
 
-Tandem is a human-controlled coding assistant inside Steel Helix:
+### Keep the code in your head.
 
-**DISCUSS → /begin → BUILD → TOUR & REFINE → /apply**
+Tandem brings an AI coding partner into Helix. Ask how something works and follow a guided tour through the actual code. Ask for a change, explore the result, and make it yours before applying it.
 
-The agent constructs a proposal in a persistent shadow worktree. You inspect it through a guided tour, edit the preview or ask for refinements, and apply the result as uncommitted changes when ready. Tandem never commits your project.
+**Understand first. Build together. Keep control.**
 
-Tours also work before changing anything: ask for a repository tour, a subsystem explanation, or a request's path through the code. Tours are independent objects with an overview and ordered, revisitable code ranges. Each stop names the exact lines to read.
+![A guided tour moves through Rust code inside Steelix, with narration above the source and conversation beside it](docs/media/tour.gif)
 
-## Using Tandem
+_Recorded in Steelix with scripted demo responses. [Replay or reproduce the recording](docs/media/README.md)._
 
-After the [one-time Steel setup](helix/tandem/README.md), open a Git project normally:
+> **Experimental.** Linux, [Steelix](https://github.com/mattwparas/helix), and an installed, signed-in Codex CLI are required. Stock Helix does not support this plugin. Expect breaking changes while the workflow takes shape.
 
-```sh
-cd /path/to/project
-hx
+## “First, walk me through it.”
+
+A tour can start before you change a single line.
+
+```text
+“Give me a quick tour of this repo.”
+“Follow this request from the server to the database.”
+“Before we change this, show me how it works.”
 ```
 
-Run `:tandem` to open the native conversation panel. Session discovery, controller startup, editor context, and the shadow workspace are automatic.
+Tandem opens the relevant files in story order, highlights exactly what to read, and puts the explanation above your code. Use `]t` and `[t` to move forward and back. Ask “why is this needed?” in the same conversation: the assistant already has your file, selection, and current stop.
 
-- Type a question and press Enter. Escape returns keyboard input to the code; click the panel or run `:tandem` to focus it again. PgUp/PgDn and the mouse wheel scroll conversation.
-- Ask “Give me a quick tour,” “go deeper,” or “go back two steps.” Narration appears in a compact reserved strip above the code, with keyboard hints for Previous/Next and `/close` or `/apply`.
-- In normal mode, `]t` / `[t` move forward/back through tour stops or review changes. Tandem temporarily borrows the default class motions while connected, restores them on disconnect, and respects custom bindings.
-- Discuss an approach in ordinary conversation, then type `/begin` to authorize construction. Conversational agreement never starts the first build.
-- During the proposal tour, edit and save the preview or ask for a change in ordinary conversation. Refinements update the shadow proposal; questions keep your tour position.
-- Type `/apply` when satisfied. This copies the saved, refined proposal into your real working directory as ordinary uncommitted changes.
-- `/proposal 1` revisits an older proposal and its saved draft. `/next`, `/prev`, `/revert`, and `/diff` support lightweight review. `/jump N` and `/close` navigate/end repository tours.
-- `:tandem-hide` hides conversation without stopping the session. `:tandem-stop` cancels any active work, stops the controller, and removes Tandem's UI while leaving Helix open.
+## From an idea to code you understand
 
-Questions automatically include the current file, cursor, selection, nearby unsaved code, stage, active tour, and tour stop. A context label shows the code location beside the composer. Type `/` for command completion and availability. In normal mode, Space t p compares old and current code in native splits, Space t r returns to the current tour stop, and Space t j searches stops. See the [keyboard controls](helix/tandem/README.md#interaction) for expanded messages and narration.
+1. **Talk it through.** Ask questions and explore approaches.
+2. **`/begin`** builds the proposal in a separate workspace.
+3. **Take the tour.** Edit the preview yourself or ask for a refinement.
+4. **`/apply`** brings the saved result into your working directory as uncommitted changes.
 
-## Multiple editors and sessions
+Your real code stays in place while the proposal takes shape. Tandem does not commit on your behalf.
 
-Each canonical Git working tree has one active controller and one connected editor. Running `:tandem` repeatedly focuses the same panel. A second editor receives a clear error instead of taking over context or creating a competing session. Separate Git worktrees can run independent sessions.
+## Read both sides of a change
 
-Closing Helix disconnects its editor but leaves the controller and proposals available. A later `:tandem` reconnects to that controller, including its bounded conversation history. Begin/Apply/Revert are blocked while the associated editor is disconnected or has unsaved buffers. Explicitly stopping the controller ends that session; starting again establishes a fresh baseline.
+Press **Space t p** to put old code on the left and the editable proposal on the right. Native Helix buffers, syntax highlighting, and the editing keys you already know. Press it again to return to your previous layout.
 
-## Development and validation
+![Native Helix comparison with the old implementation on the left and the proposed change on the right](docs/media/comparison.png)
+
+The conversation stays in the editor too: a compact panel, message history on Up/Down, and a full Helix buffer when you want more room to write.
+
+## Try it
+
+Clone and build with Nix:
 
 ```sh
-nix develop
-cargo test
-cargo clippy --all-targets -- -D warnings
+git clone https://github.com/tholoo/tandem.hx
+cd tandem.hx
 nix build
-nix run -- --help
-
-# Outside restricted builders: local sockets, child processes, and Bubblewrap.
-cargo test --test runtime --test session -- --ignored
-# Real Steel editor; isolated configuration, no injected editor keys or model calls.
-python3 scripts/check-helix.py /path/to/steel/hx /path/to/helix/runtime
-# Screen-level colors, destination visibility, narration layout, and q! regression.
-python3 scripts/check-helix-ui.py /path/to/steel/hx /path/to/helix/runtime
-# Optional live API check: existing Codex login and normal model usage.
-python3 scripts/check-codex.py
+export PATH="$PWD/result/bin:$PATH"
 ```
 
-Linux, Rust 1.89+, and Git are required. The Nix package and development shell select Bubblewrap explicitly. Codex also needs to be on PATH. Existing Codex login and model/provider configuration are reused; external MCP tools, plugins, and hooks are excluded because they can bypass the source-code sandbox. The entire runtime has read-only source access until Begin, and can write only shadow source during BUILD and proposal refinement. After application, further conversation is read-only until another `/begin`.
+[Install the Steelix plugin](helix/tandem/README.md#one-time-installation), then open an existing Git repository in Helix and run:
 
-For an offline demonstration, run `tandem start /path/to/project --mock` in a terminal, then `:tandem` in Helix on that project. The explicit mock backend creates a labeled demonstration file; it is not an implementation agent. `tandem send SOCKET '{"action":"status"}'` remains available for protocol inspection.
+```text
+:tandem
+```
 
-## Current status and limits
+Start with **“Give me a quick tour of this repo.”**
 
-This is a working Linux prototype, exercised with Codex CLI 0.154.0, the installed Steelix 2026-05-21 package. It includes dirty baselines, multi-file proposals, version switching, preservation of manual edits, safe hunk reversion, native conversation, and independent repository/proposal tours. Stable Helix cannot load the plugin.
+[Setup and keyboard controls](helix/tandem/README.md) · [Architecture](docs/architecture.md) · [Contributing](CONTRIBUTING.md)
 
-Repositories need an existing commit. Symlinks, submodules, and non-UTF-8 filenames are rejected; ignored files are not imported initially. Save buffers and avoid simultaneous writes during application/reversion. Failed or cancelled revisions leave real files untouched and restore the saved preview from before that turn. Save preview buffers before asking for changes; questions with unsaved buffers remain read-only. Build commands have private scratch space but no network or permission expansion, so uncached dependency downloads need a future approval path. The conversation panel styles role labels, commands, and inline backtick code. Ctrl+X expands the draft into a native Helix buffer for multiline editing. Full Markdown and fenced-code syntax highlighting are not yet implemented.
+## What to expect today
 
-Session directories can contain source snapshots and a private copy of the existing Codex login; remove them when finished. No credentials or machine configuration belong in this repository.
+Codex is the first live backend. The interface is designed to accommodate other providers, but Claude and OpenCode adapters are not implemented yet.
 
-See [architecture](docs/architecture.md) and [local protocol](docs/protocol.md) for the boundaries and preservation rules.
+Commands that need additional permissions are currently blocked; there is no approval prompt yet. Projects with uncached dependencies may need manual setup. Sessions survive closing Helix, but restarting the controller starts a fresh session. See the [current limitations](docs/limitations.md) before trying it on important work.
+
+Found a rough edge? A small reproduction or a short recording is especially helpful. See [contributing](CONTRIBUTING.md) for checks, demo capture, and local setup.
+
+[MIT licensed](LICENSE).
