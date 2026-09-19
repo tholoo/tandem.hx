@@ -72,7 +72,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        // CI's nested TMPDIR can exceed the Unix socket path limit after the
+        // registry adds checkout/session directories and controller.sock.
+        let root = tempfile::Builder::new()
+            .prefix("tandem-session-")
+            .tempdir_in("/tmp")
+            .unwrap();
         let repo = root.path().join("repo");
         let runtime = root.path().join("run");
         fs::create_dir(&repo).unwrap();
